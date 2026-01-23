@@ -26,9 +26,6 @@ wget https://raw.githubusercontent.com/vdarkobar/lab/main/server/hardening.sh.sh
 
 sha256sum -c hardening.sh.sha256
 # Output: hardening.sh: OK ✓
-
-chmod +x hardening.sh
-./hardening.sh
 ```
 ```bash
 # run script

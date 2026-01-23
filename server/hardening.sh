@@ -3,15 +3,15 @@
 #############################################################################
 # Debian 13 VM/LXC Server Hardening Script                                  #
 # Professional edition with enhanced output formatting                      #
-#                                                                            #
+#                                                                           #
 # EXECUTION REQUIREMENTS:                                                   #
 #   - Must be run as a NON-ROOT user                                        #
 #   - User must have sudo privileges                                        #
 #   - Script will use sudo internally for privileged operations             #
-#                                                                            #
+#                                                                           #
 # CORRECT USAGE:                                                            #
 #   ./hardening_professional.sh                                             #
-#                                                                            #
+#                                                                           #
 # INCORRECT USAGE:                                                          #
 #   sudo ./hardening_professional.sh  ← DO NOT DO THIS                      #
 #   # ./hardening_professional.sh     ← DO NOT DO THIS                      #

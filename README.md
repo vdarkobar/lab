@@ -4,13 +4,13 @@
 <a href="https://github.com/vdarkobar/lab/blob/main/misc/checksum-verification.md#checksum-verification-guide">*Checksum verification*</a>  
 
   
-#### *VM Template <a href="https://github.com/vdarkobar/cloud/blob/main/all/debvm/setup.md"> * </a>*:
+#### *VM Template <a href="https://raw.githubusercontent.com/vdarkobar/lab/refs/heads/main/server/debvm.sh"> * </a>*:
 ```bash
 # run inside pve shell
 bash -c "$(wget -qLO - https://raw.githubusercontent.com/vdarkobar/lab/refs/heads/main/server/debvm.sh)"
 ```
   
-#### *LXC Template <a href="https://github.com/vdarkobar/cloud/blob/main/all/debct/setup.md"> * </a>*:
+#### *LXC Template <a href="https://raw.githubusercontent.com/vdarkobar/lab/refs/heads/main/server/deblxc.sh"> * </a>*:
 ```bash
 # run inside pve shell
 bash -c "$(wget -qLO - https://raw.githubusercontent.com/vdarkobar/cloud/refs/heads/main/all/debct/lxc01.sh)"

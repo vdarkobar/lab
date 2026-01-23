@@ -1,6 +1,6 @@
 # Simple Repository Setup - Complete Guide
 
-<a href="<a href="https://github.com/vdarkobar/lab">back</a>  ">back</a>  
+<a href="https://github.com/vdarkobar/lab">back</a>  
 
 ## 🎯 Your Choice: Simple & Clean
 

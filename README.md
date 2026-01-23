@@ -7,7 +7,7 @@
 #### *VM Template <a href="https://github.com/vdarkobar/cloud/blob/main/all/debvm/setup.md"> * </a>*:
 ```bash
 # run inside pve shell
-bash -c "$(wget -qLO - https://raw.githubusercontent.com/vdarkobar/cloud/refs/heads/main/all/debvm/vm01.sh)"
+bash -c "$(wget -qLO - https://github.com/vdarkobar/lab/blob/main/server/debvm.sh)"
 ```
   
 #### *LXC Template <a href="https://github.com/vdarkobar/cloud/blob/main/all/debct/setup.md"> * </a>*:

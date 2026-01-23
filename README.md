@@ -21,7 +21,6 @@ bash -c "$(wget -qLO - https://raw.githubusercontent.com/vdarkobar/cloud/refs/he
 # run inside VM/LXC shell
 wget https://raw.githubusercontent.com/vdarkobar/lab/main/server/hardening.sh
 wget https://raw.githubusercontent.com/vdarkobar/lab/main/server/hardening.sh.sha256
-
 sha256sum -c hardening.sh.sha256
 # Output: hardening.sh: OK ✓
 ```

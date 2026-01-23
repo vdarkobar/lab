@@ -255,13 +255,3 @@ git add *.sha256
 git commit -m "Update checksums"
 git push
 ```
-
----
-
-**Your repository will be:**
-- Clean ✓
-- Simple ✓
-- Secure ✓
-- Professional ✓
-
-Exactly what you wanted! 🎉

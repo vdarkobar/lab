@@ -13,7 +13,7 @@ bash -c "$(wget -qLO - https://raw.githubusercontent.com/vdarkobar/lab/refs/head
 #### *LXC Template <a href="https://raw.githubusercontent.com/vdarkobar/lab/refs/heads/main/server/deblxc.sh"> * </a>*:
 ```bash
 # run inside pve shell
-bash -c "$(wget -qLO - https://raw.githubusercontent.com/vdarkobar/cloud/refs/heads/main/all/debct/lxc01.sh)"
+bash -c "$(wget -qLO - https://raw.githubusercontent.com/vdarkobar/lab/refs/heads/main/server/deblxc.sh)"
 ```  
   
 #### *Server hardening script, download + verify <a href="https://github.com/vdarkobar/cloud/blob/main/all/debvm/setup.md"> * </a>*:

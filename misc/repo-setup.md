@@ -1,6 +1,6 @@
 # Simple Repository Setup - Complete Guide
 
-<a href="https://github.com/vdarkobar/lab">back</a>  
+<a href="https://github.com/vdarkobar/lab?tab=readme-ov-file#self-hosted-homelab-cloud">back</a>  
 
 ## 🎯 Your Choice: Simple & Clean
 

@@ -31,7 +31,7 @@ git commit -m "Add checksum helper script"
 git push
 ```
 
-### 3. Update Your README
+### 3. Update README
 
 Copy the content from `README_TEMPLATE.md` to your repo's README.md:
 
@@ -73,9 +73,8 @@ lab/
     └── hardening.sh            # Hardening script
 ```
 
-Clean, simple, no bloat!
 
-## 🔄 Your Daily Workflow
+## 🔄 Daily Workflow
 
 ### When You Update npm.sh:
 
@@ -130,27 +129,11 @@ Mismatch? Abort ✗
 
 ## 🎨 Repository Appearance
 
-With the README template, your repo will look:
-
 - ✅ **Professional** - Clear structure and documentation
 - ✅ **Welcoming** - Easy for others to understand and use
 - ✅ **Secure** - Checksums clearly explained
 - ✅ **Simple** - No unnecessary complexity
 - ✅ **Maintainable** - Easy to update
-
-## 📊 File Sizes
-
-Your repository stays lean:
-
-```
-README.md                 ~8 KB  (comprehensive but concise)
-update-checksums.sh       ~2 KB  (helper script)
-npm.sh                   ~15 KB  (your script)
-npm.sh.sha256            66 bytes (just the hash!)
-hardening.sh             ~32 KB  (the hardening script)
-```
-
-**Total overhead for security: 66 bytes per script!**
 
 ## 🔐 Security Level
 
@@ -162,9 +145,8 @@ hardening.sh             ~32 KB  (the hardening script)
 | Complexity | ✅ Minimal |
 | Maintenance | ✅ Easy |
 
-**You get enterprise-level security without enterprise-level complexity!**
 
-## 🚀 Getting Started Right Now
+## 🚀 Getting Started
 
 ### Complete Setup in 5 Minutes:
 
@@ -192,36 +174,6 @@ git push
 # Done! ✓
 ```
 
-## 📝 Files Provided to You
-
-1. **SIMPLE_SETUP_COMPLETE.md** - This complete guide
-2. **README_TEMPLATE.md** - Professional README for your repo
-3. **update-checksums.sh** - Helper script for easy updates
-4. **hardening.sh** - Already updated to support this!
-
-## ✨ Benefits Recap
-
-✅ **No GitHub Actions** - No workflows to maintain  
-✅ **No Releases** - No tagging complexity  
-✅ **Simple Updates** - Edit → checksum → commit  
-✅ **Still Secure** - Full SHA256 verification  
-✅ **Professional** - Nice README, clean structure  
-✅ **Easy Maintenance** - Anyone can understand it  
-
-## 🎯 Summary
-
-**Three files make it work:**
-1. `npm.sh` - Your script
-2. `npm.sh.sha256` - The checksum (auto-generated)
-3. `README.md` - Professional documentation
-
-**One command updates checksums:**
-```bash
-./update-checksums.sh
-```
-
-**Zero complexity, maximum security!**
-
 ---
 
 ## 🆘 Quick Reference
@@ -247,13 +199,3 @@ git add *.sha256
 git commit -m "Update checksums"
 git push
 ```
-
----
-
-**Your repository will be:**
-- Clean ✓
-- Simple ✓
-- Secure ✓
-- Professional ✓
-
-Exactly what you wanted! 🎉

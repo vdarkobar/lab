@@ -1,13 +1,7 @@
 <a href="https://github.com/vdarkobar/lab">back</a>  
   
 # Simple Repository Setup - Complete Guide
-
-## 🎯 Your Choice: Simple & Clean
-
-You've chosen to keep your repository simple without GitHub Actions, workflows, or releases. Great choice for personal projects!
-
-## 📦 What You Need to Do
-
+  
 ### 1. Add Checksum Files (One Time)
 
 ```bash

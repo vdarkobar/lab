@@ -19,10 +19,10 @@ echo
 # Find all .sh files in the repository
 SCRIPT_COUNT=0
 
-# Process all/apps directory
-if [ -d "all/apps" ]; then
-    echo -e "${GREEN}Processing all/apps/${NC}"
-    cd all/apps
+# Process apps directory
+if [ -d "apps" ]; then
+    echo -e "${GREEN}Processing apps/${NC}"
+    cd apps
     
     for script in *.sh; do
         if [ -f "$script" ]; then
@@ -34,14 +34,14 @@ if [ -d "all/apps" ]; then
         fi
     done
     
-    cd ../..
+    cd ..
 fi
 
-# Process hardening directory
-if [ -d "hardening" ]; then
+# Process server directory
+if [ -d "server" ]; then
     echo
-    echo -e "${GREEN}Processing hardening/${NC}"
-    cd hardening
+    echo -e "${GREEN}Processing server/${NC}"
+    cd server
     
     for script in *.sh; do
         if [ -f "$script" ]; then
@@ -72,7 +72,7 @@ echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━�
 echo -e "${GREEN}✓ Generated checksums for $SCRIPT_COUNT script(s)${NC}"
 echo
 echo "Next steps:"
-echo "  git add *.sha256 all/apps/*.sha256 hardening/*.sha256"
+echo "  git add *.sha256 apps/*.sha256 server/*.sha256"
 echo "  git commit -m 'Update checksums'"
 echo "  git push"
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"

@@ -20,67 +20,18 @@
 set -euo pipefail  # Exit on error, undefined vars, pipe failures
 
 #################################################################
-# Terminal Formatting (Using tput for portability)              #
+# Load Formatting Library                                       #
 #################################################################
 
-# Check if terminal supports colors
-if [[ -t 1 ]] && command -v tput >/dev/null 2>&1 && tput setaf 1 >/dev/null 2>&1; then
-    COLORS_SUPPORTED=true
-    
-    # Colors
-    readonly C_RESET=$(tput sgr0)
-    readonly C_BOLD=$(tput bold)
-    readonly C_DIM=$(tput dim)
-    
-    # Foreground colors
-    readonly C_BLACK=$(tput setaf 0)
-    readonly C_RED=$(tput setaf 1)
-    readonly C_GREEN=$(tput setaf 2)
-    readonly C_YELLOW=$(tput setaf 3)
-    readonly C_BLUE=$(tput setaf 4)
-    readonly C_MAGENTA=$(tput setaf 5)
-    readonly C_CYAN=$(tput setaf 6)
-    readonly C_WHITE=$(tput setaf 7)
-    
-    # Bright colors (if supported)
-    readonly C_BRIGHT_GREEN=$(tput setaf 10 2>/dev/null || tput setaf 2)
-    readonly C_BRIGHT_RED=$(tput setaf 9 2>/dev/null || tput setaf 1)
-    readonly C_BRIGHT_YELLOW=$(tput setaf 11 2>/dev/null || tput setaf 3)
-    readonly C_BRIGHT_BLUE=$(tput setaf 12 2>/dev/null || tput setaf 4)
-else
-    COLORS_SUPPORTED=false
-    readonly C_RESET=""
-    readonly C_BOLD=""
-    readonly C_DIM=""
-    readonly C_BLACK=""
-    readonly C_RED=""
-    readonly C_GREEN=""
-    readonly C_YELLOW=""
-    readonly C_BLUE=""
-    readonly C_MAGENTA=""
-    readonly C_CYAN=""
-    readonly C_WHITE=""
-    readonly C_BRIGHT_GREEN=""
-    readonly C_BRIGHT_RED=""
-    readonly C_BRIGHT_YELLOW=""
-    readonly C_BRIGHT_BLUE=""
-fi
+# Get the directory where this script is located
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Unicode symbols (with ASCII fallbacks)
-if [[ "${LANG:-}" =~ UTF-8 ]] || [[ "${LC_ALL:-}" =~ UTF-8 ]]; then
-    readonly SYMBOL_SUCCESS="✓"
-    readonly SYMBOL_ERROR="✗"
-    readonly SYMBOL_WARNING="⚠"
-    readonly SYMBOL_INFO="ℹ"
-    readonly SYMBOL_ARROW="→"
-    readonly SYMBOL_BULLET="•"
+# Source the formatting library
+if [[ -f "$SCRIPT_DIR/../lib/formatting.sh" ]]; then
+    source "$SCRIPT_DIR/../lib/formatting.sh"
 else
-    readonly SYMBOL_SUCCESS="+"
-    readonly SYMBOL_ERROR="x"
-    readonly SYMBOL_WARNING="!"
-    readonly SYMBOL_INFO="i"
-    readonly SYMBOL_ARROW=">"
-    readonly SYMBOL_BULLET="*"
+    echo "ERROR: Cannot find formatting library at $SCRIPT_DIR/../lib/formatting.sh" >&2
+    exit 1
 fi
 
 #################################################################
@@ -107,118 +58,6 @@ readonly APPS_BASE_URL="https://raw.githubusercontent.com/vdarkobar/lab/main/app
 readonly SCRIPT_VERSION="2.1.0"
 readonly LOG_FILE="/var/log/hardening-$(date +%Y%m%d-%H%M%S).log"
 readonly BACKUP_DIR="/root/hardening-backups-$(date +%Y%m%d-%H%M%S)"
-
-#################################################################
-# Output Functions (Elegant & Professional)                     #
-#################################################################
-
-# Print functions with consistent formatting
-print_success() {
-    local msg="$*"
-    echo "${C_BRIGHT_GREEN}${C_BOLD}${SYMBOL_SUCCESS}${C_RESET} ${C_GREEN}${msg}${C_RESET}"
-}
-
-print_error() {
-    local msg="$*"
-    echo "${C_BRIGHT_RED}${C_BOLD}${SYMBOL_ERROR}${C_RESET} ${C_RED}${msg}${C_RESET}" >&2
-}
-
-print_warning() {
-    local msg="$*"
-    echo "${C_BRIGHT_YELLOW}${C_BOLD}${SYMBOL_WARNING}${C_RESET} ${C_YELLOW}${msg}${C_RESET}"
-}
-
-print_info() {
-    local msg="$*"
-    echo "${C_BRIGHT_BLUE}${C_BOLD}${SYMBOL_INFO}${C_RESET} ${C_BLUE}${msg}${C_RESET}"
-}
-
-print_step() {
-    local msg="$*"
-    echo "${C_CYAN}${C_BOLD}${SYMBOL_ARROW}${C_RESET} ${C_CYAN}${msg}${C_RESET}"
-}
-
-print_header() {
-    local msg="$*"
-    echo
-    echo "${C_BOLD}${C_CYAN}━━━ ${msg} ━━━${C_RESET}"
-}
-
-print_subheader() {
-    local msg="$*"
-    echo "${C_DIM}${SYMBOL_BULLET} ${msg}${C_RESET}"
-}
-
-# Key-value pair formatting
-print_kv() {
-    local key="$1"
-    local value="$2"
-    printf "${C_CYAN}%-20s${C_RESET} ${C_WHITE}%s${C_RESET}\n" "$key:" "$value"
-}
-
-#################################################################
-# Logging System                                                 #
-#################################################################
-
-log() {
-    local level="$1"
-    shift
-    local message="$*"
-    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
-    
-    # Log to file (always plain text)
-    echo "${timestamp} [${level}] ${message}" >> "$LOG_FILE"
-    
-    # Display to terminal (with formatting)
-    case "$level" in
-        SUCCESS)
-            print_success "$message"
-            ;;
-        ERROR)
-            print_error "$message"
-            ;;
-        WARN)
-            print_warning "$message"
-            ;;
-        INFO)
-            print_info "$message"
-            ;;
-        STEP)
-            print_step "$message"
-            ;;
-        *)
-            echo "$message"
-            ;;
-    esac
-}
-
-die() {
-    log ERROR "$@"
-    echo
-    print_error "Script failed. Review the log file:"
-    echo "  ${C_DIM}${LOG_FILE}${C_RESET}"
-    exit 1
-}
-
-#################################################################
-# Visual Elements                                                #
-#################################################################
-
-draw_box() {
-    local text="$1"
-    local width=68
-    local padding=$(( (width - ${#text} - 2) / 2 ))
-    
-    echo "${C_CYAN}"
-    echo "╔$(printf '═%.0s' $(seq 1 $width))╗"
-    printf "║%*s%s%*s║\n" $padding "" "$text" $padding ""
-    echo "╚$(printf '═%.0s' $(seq 1 $width))╝"
-    echo "${C_RESET}"
-}
-
-draw_separator() {
-    echo "${C_DIM}$(printf '─%.0s' $(seq 1 70))${C_RESET}"
-}
 
 #################################################################
 # Pre-flight Checks                                             #
@@ -1029,7 +868,7 @@ download_and_install_app() {
     local display_name="$2"
     local script_url="${APPS_BASE_URL}/${script_name}"
     local tmp_script="/tmp/app-install-$RANDOM.sh"
-    local tmp_checksum="/tmp/app-checksum-$RANDOM.txt"
+    local checksums_file="${SCRIPT_DIR}/../CHECKSUMS.txt"
     local checksum_verified=false
     
     print_header "Installing: $display_name"
@@ -1046,28 +885,40 @@ download_and_install_app() {
     local file_size=$(stat -c%s "$tmp_script" 2>/dev/null || stat -f%z "$tmp_script" 2>/dev/null || echo "unknown")
     print_success "Script downloaded (${file_size} bytes)"
     
-    # Try downloading checksum file
-    print_step "Looking for checksum file..."
-    if curl -fsSL "${script_url}.sha256" -o "$tmp_checksum" 2>/dev/null; then
-        print_success "Checksum file found"
+    # Try to verify using CHECKSUMS.txt
+    print_step "Looking for checksum..."
+    
+    if [[ -f "$checksums_file" ]]; then
+        print_success "Found CHECKSUMS.txt"
         
-        # Verify checksum
-        local expected_hash=$(awk '{print $1}' "$tmp_checksum")
-        local actual_hash=$(sha256sum "$tmp_script" | awk '{print $1}')
+        # Extract expected hash for this script from CHECKSUMS.txt
+        local expected_hash=$(grep "apps/${script_name}" "$checksums_file" | grep -v '^#' | awk '{print $1}')
         
-        print_step "Verifying integrity..."
-        if [[ "$actual_hash" == "$expected_hash" ]]; then
-            print_success "Checksum verified: ${C_DIM}${actual_hash:0:16}...${C_RESET}"
-            checksum_verified=true
+        if [[ -n "$expected_hash" ]]; then
+            local actual_hash=$(sha256sum "$tmp_script" | awk '{print $1}')
+            
+            print_step "Verifying integrity..."
+            if [[ "$actual_hash" == "$expected_hash" ]]; then
+                print_success "Checksum verified: ${C_DIM}${actual_hash:0:16}...${C_RESET}"
+                checksum_verified=true
+            else
+                rm -f "$tmp_script"
+                print_error "Expected: ${C_DIM}${expected_hash:0:16}...${C_RESET}"
+                print_error "Got:      ${C_DIM}${actual_hash:0:16}...${C_RESET}"
+                print_error "Checksum verification FAILED!"
+                return 1
+            fi
         else
-            rm -f "$tmp_script" "$tmp_checksum"
-            print_error "Expected: ${C_DIM}${expected_hash:0:16}...${C_RESET}"
-            print_error "Got:      ${C_DIM}${actual_hash:0:16}...${C_RESET}"
-            print_error "Checksum verification FAILED!"
-            return 1
+            print_warning "No checksum found in CHECKSUMS.txt for ${script_name}"
+            checksum_verified=false
         fi
     else
-        print_warning "No checksum file found at ${C_DIM}${script_url}.sha256${C_RESET}"
+        print_warning "CHECKSUMS.txt not found at ${C_DIM}${checksums_file}${C_RESET}"
+        checksum_verified=false
+    fi
+    
+    # If no checksum verification, ask user
+    if [[ "$checksum_verified" == false ]]; then
         print_warning "Proceeding without verification (not recommended)"
         
         # Show what we're about to run
@@ -1089,7 +940,7 @@ download_and_install_app() {
                     break
                     ;;
                 no|n)
-                    rm -f "$tmp_script" "$tmp_checksum"
+                    rm -f "$tmp_script"
                     print_info "Installation cancelled"
                     return 1
                     ;;
@@ -1114,7 +965,7 @@ download_and_install_app() {
     fi
     
     # Cleanup
-    rm -f "$tmp_script" "$tmp_checksum"
+    rm -f "$tmp_script"
     echo
 }
 

@@ -17,6 +17,7 @@ bash -c "$(wget -qLO - https://raw.githubusercontent.com/vdarkobar/lab/refs/head
   
 #### *Server hardening script, download + verify <a href="https://github.com/vdarkobar/cloud/blob/main/all/debvm/setup.md"> * </a>*:
 ```bash
+# download + verify 
 # run inside VM/LXC shell
 wget https://raw.githubusercontent.com/vdarkobar/lab/main/server/hardening.sh
 wget https://raw.githubusercontent.com/vdarkobar/lab/main/server/hardening.sh.sha256

@@ -3,15 +3,15 @@
 #############################################################################
 # Debian 13 VM/LXC Server Hardening Script                                  #
 # Professional edition with enhanced output formatting                      #
-#                                                                           #
+#                                                                            #
 # EXECUTION REQUIREMENTS:                                                   #
 #   - Must be run as a NON-ROOT user                                        #
 #   - User must have sudo privileges                                        #
 #   - Script will use sudo internally for privileged operations             #
-#                                                                           #
+#                                                                            #
 # CORRECT USAGE:                                                            #
 #   ./hardening_professional.sh                                             #
-#                                                                           #
+#                                                                            #
 # INCORRECT USAGE:                                                          #
 #   sudo ./hardening_professional.sh  ← DO NOT DO THIS                      #
 #   # ./hardening_professional.sh     ← DO NOT DO THIS                      #
@@ -84,16 +84,29 @@ else
 fi
 
 #################################################################
+# Application Registry - ADD NEW APPS HERE                      #
+#################################################################
+
+# Easy app registration - just add new entries to this array
+# Format: "display_name|script_name|detection_command"
+readonly APP_REGISTRY=(
+    "Nginx Proxy Manager|npm.sh|docker ps -a --format '{{.Names}}' | grep -q 'npm'"
+    "Docker|docker.sh|command -v docker >/dev/null 2>&1"
+    "Portainer|portainer.sh|docker ps -a --format '{{.Names}}' | grep -q 'portainer'"
+    # Add more apps here - one per line
+    # "App Name|script.sh|detection command that returns 0 if installed"
+)
+
+# Base URL for app scripts
+readonly APPS_BASE_URL="https://raw.githubusercontent.com/vdarkobar/lab/main/apps"
+
+#################################################################
 # Configuration                                                  #
 #################################################################
 
 readonly SCRIPT_VERSION="2.1.0"
 readonly LOG_FILE="/var/log/hardening-$(date +%Y%m%d-%H%M%S).log"
 readonly BACKUP_DIR="/root/hardening-backups-$(date +%Y%m%d-%H%M%S)"
-
-# Remote script configuration - UPDATE THESE VALUES
-readonly REMOTE_SCRIPT_URL="https://raw.githubusercontent.com/vdarkobar/lab/main/apps/npm.sh"
-readonly REMOTE_SCRIPT_SHA256=""  # TODO: Add actual checksum or leave empty for auto-detection
 
 #################################################################
 # Output Functions (Elegant & Professional)                     #
@@ -927,33 +940,118 @@ EOF
 }
 
 #################################################################
-# Download and Verify Remote Script                             #
+# Check if Application is Installed                             #
 #################################################################
 
-download_remote_script() {
-    print_header "Remote Application Installation"
+check_app_installed() {
+    local detection_cmd="$1"
     
-    local tmp_script="/tmp/npm-install-$RANDOM.sh"
-    local tmp_checksum="/tmp/npm-checksum-$RANDOM.txt"
+    # Run detection command, suppress output
+    if eval "$detection_cmd" 2>/dev/null; then
+        return 0  # Installed
+    else
+        return 1  # Not installed
+    fi
+}
+
+#################################################################
+# Show Application Menu                                         #
+#################################################################
+
+show_app_menu() {
+    print_header "Application Installation"
+    
+    echo
+    print_info "Available applications to install:"
+    echo
+    
+    local available_apps=()
+    local app_count=0
+    
+    # Build menu of available (not installed) apps
+    for app_entry in "${APP_REGISTRY[@]}"; do
+        IFS='|' read -r display_name script_name detection_cmd <<< "$app_entry"
+        
+        if check_app_installed "$detection_cmd"; then
+            print_subheader "${C_DIM}$display_name - Already installed ✓${C_RESET}"
+        else
+            ((app_count++))
+            available_apps+=("$app_entry")
+            print_subheader "${C_CYAN}${app_count})${C_RESET} $display_name ${C_DIM}(${script_name})${C_RESET}"
+        fi
+    done
+    
+    echo
+    print_subheader "${C_CYAN}$((app_count + 1)))${C_RESET} Skip - No application installation"
+    echo
+    
+    # If no apps available, skip
+    if [[ $app_count -eq 0 ]]; then
+        print_warning "All applications already installed"
+        return 1
+    fi
+    
+    # Get user selection
+    while true; do
+        echo -n "${C_CYAN}${C_BOLD}Select application to install [1-$((app_count + 1))]:${C_RESET} "
+        read -r selection
+        
+        # Check if user wants to skip
+        if [[ "$selection" -eq $((app_count + 1)) ]]; then
+            print_info "Skipping application installation"
+            return 1
+        fi
+        
+        # Validate selection
+        if [[ "$selection" =~ ^[0-9]+$ ]] && [[ "$selection" -ge 1 ]] && [[ "$selection" -le $app_count ]]; then
+            # Get selected app
+            local selected_app="${available_apps[$((selection - 1))]}"
+            IFS='|' read -r display_name script_name detection_cmd <<< "$selected_app"
+            
+            print_success "Selected: $display_name"
+            echo
+            
+            # Download and install
+            download_and_install_app "$script_name" "$display_name"
+            return 0
+        else
+            print_error "Invalid selection. Please enter a number between 1 and $((app_count + 1))"
+        fi
+    done
+}
+
+#################################################################
+# Download and Install Application                              #
+#################################################################
+
+download_and_install_app() {
+    local script_name="$1"
+    local display_name="$2"
+    local script_url="${APPS_BASE_URL}/${script_name}"
+    local tmp_script="/tmp/app-install-$RANDOM.sh"
+    local tmp_checksum="/tmp/app-checksum-$RANDOM.txt"
     local checksum_verified=false
     
-    # Download script
-    print_step "Downloading installation script..."
-    print_subheader "Source: ${C_DIM}${REMOTE_SCRIPT_URL}${C_RESET}"
+    print_header "Installing: $display_name"
     
-    if ! curl -fsSL "$REMOTE_SCRIPT_URL" -o "$tmp_script"; then
-        die "Failed to download remote script"
+    # Download script
+    print_step "Downloading ${script_name}..."
+    print_subheader "Source: ${C_DIM}${script_url}${C_RESET}"
+    
+    if ! curl -fsSL "$script_url" -o "$tmp_script"; then
+        print_error "Failed to download ${script_name}"
+        return 1
     fi
     
     local file_size=$(stat -c%s "$tmp_script" 2>/dev/null || stat -f%z "$tmp_script" 2>/dev/null || echo "unknown")
     print_success "Script downloaded (${file_size} bytes)"
     
-    # Try downloading checksum file first
+    # Try downloading checksum file
     print_step "Looking for checksum file..."
-    if curl -fsSL "${REMOTE_SCRIPT_URL}.sha256" -o "$tmp_checksum" 2>/dev/null; then
-        print_success "Checksum file found at ${C_DIM}${REMOTE_SCRIPT_URL}.sha256${C_RESET}"
+    if curl -fsSL "${script_url}.sha256" -o "$tmp_checksum" 2>/dev/null; then
+        print_success "Checksum file found"
         
-        # Extract expected hash from checksum file
+        # Verify checksum
         local expected_hash=$(awk '{print $1}' "$tmp_checksum")
         local actual_hash=$(sha256sum "$tmp_script" | awk '{print $1}')
         
@@ -965,71 +1063,34 @@ download_remote_script() {
             rm -f "$tmp_script" "$tmp_checksum"
             print_error "Expected: ${C_DIM}${expected_hash:0:16}...${C_RESET}"
             print_error "Got:      ${C_DIM}${actual_hash:0:16}...${C_RESET}"
-            die "Checksum verification FAILED! File may be tampered."
+            print_error "Checksum verification FAILED!"
+            return 1
         fi
     else
-        print_info "No checksum file at ${C_DIM}${REMOTE_SCRIPT_URL}.sha256${C_RESET}"
+        print_warning "No checksum file found at ${C_DIM}${script_url}.sha256${C_RESET}"
+        print_warning "Proceeding without verification (not recommended)"
         
-        # Fallback to hardcoded checksum
-        if [[ -n "$REMOTE_SCRIPT_SHA256" ]]; then
-            print_step "Using hardcoded checksum for verification..."
-            local actual_hash=$(sha256sum "$tmp_script" | awk '{print $1}')
-            
-            if [[ "$actual_hash" == "$REMOTE_SCRIPT_SHA256" ]]; then
-                print_success "Checksum verified: ${C_DIM}${actual_hash:0:16}...${C_RESET}"
-                checksum_verified=true
-            else
-                rm -f "$tmp_script"
-                print_error "Expected: ${C_DIM}${REMOTE_SCRIPT_SHA256:0:16}...${C_RESET}"
-                print_error "Got:      ${C_DIM}${actual_hash:0:16}...${C_RESET}"
-                die "Checksum verification FAILED! File may be tampered."
-            fi
-        fi
-    fi
-    
-    # If no checksum available, warn and ask for confirmation
-    if [[ "$checksum_verified" == false ]]; then
+        # Show what we're about to run
         echo
-        draw_separator
-        print_warning "SECURITY WARNING: No checksum verification available!"
-        draw_separator
-        echo
-        print_error "The downloaded script cannot be verified for integrity"
-        print_info "This is a potential security risk"
-        echo
-        print_info "Script source: ${C_DIM}${REMOTE_SCRIPT_URL}${C_RESET}"
-        print_info "Actual checksum: ${C_DIM}$(sha256sum "$tmp_script" | awk '{print $1}')${C_RESET}"
-        echo
-        print_subheader "To fix this permanently, add to line 27 of this script:"
-        echo "  ${C_CYAN}readonly REMOTE_SCRIPT_SHA256=\"$(sha256sum "$tmp_script" | awk '{print $1}')\"${C_RESET}"
-        echo
-        print_subheader "Or create a checksum file:"
-        echo "  ${C_CYAN}echo \"$(sha256sum "$tmp_script" | awk '{print $1}')  npm.sh\" > npm.sh.sha256${C_RESET}"
-        echo "  ${C_CYAN}# Upload to: ${REMOTE_SCRIPT_URL}.sha256${C_RESET}"
-        echo
-        
-        # Show script preview
         print_step "Script preview (first 20 lines):"
         echo "${C_DIM}"
         head -20 "$tmp_script"
         echo "${C_RESET}"
         echo
         
-        # Ask for explicit confirmation
+        # Ask for confirmation
         while true; do
             echo -n "${C_BOLD}${C_RED}Execute unverified script? ${C_RESET}${C_DIM}(yes/no)${C_RESET} "
             read -r response
             
             case "$(echo "$response" | tr '[:upper:]' '[:lower:]')" in
                 yes|y)
-                    print_warning "Proceeding with unverified script execution"
-                    log WARN "User chose to execute unverified script: $REMOTE_SCRIPT_URL"
+                    print_warning "Proceeding without verification"
                     break
                     ;;
                 no|n)
-                    log INFO "User declined to execute unverified script"
                     rm -f "$tmp_script" "$tmp_checksum"
-                    print_info "Script execution cancelled - hardening complete"
+                    print_info "Installation cancelled"
                     return 1
                     ;;
                 *)
@@ -1039,25 +1100,17 @@ download_remote_script() {
         done
     fi
     
-    # Make executable
-    chmod +x "$tmp_script"
-    
     # Execute the script
     echo
-    print_step "Executing installation script..."
+    print_step "Executing ${script_name}..."
+    chmod +x "$tmp_script"
     
-    if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
-        if sudo -E bash "$tmp_script"; then
-            log SUCCESS "Remote script executed successfully"
-        else
-            log ERROR "Remote script execution failed (exit code: $?)"
-        fi
+    if sudo -E bash "$tmp_script"; then
+        log SUCCESS "${display_name} installed successfully"
+        print_success "${display_name} installation completed"
     else
-        if bash "$tmp_script"; then
-            log SUCCESS "Remote script executed successfully"
-        else
-            log ERROR "Remote script execution failed (exit code: $?)"
-        fi
+        log ERROR "${display_name} installation failed (exit code: $?)"
+        print_error "${display_name} installation failed"
     fi
     
     # Cleanup
@@ -1169,11 +1222,11 @@ main() {
     lock_root_account
     configure_sshd
     
-    # Download and execute remote script
-    if download_remote_script; then
-        log SUCCESS "Remote script executed successfully"
+    # Show application installation menu
+    if show_app_menu; then
+        log SUCCESS "Application installation completed"
     else
-        print_warning "Remote script execution skipped or failed"
+        print_info "Application installation skipped"
     fi
     
     # Show summary

@@ -7,15 +7,20 @@
 
 set -e
 
-GREEN='\033[0;32m'
-BLUE='\033[0;34m'
-YELLOW='\033[0;33m'
-NC='\033[0m'
+#################################################################
+# Load Formatting Library                                       #
+#################################################################
 
-echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${BLUE}  Checksum Generator for CHECKSUMS.txt${NC}"
-echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+if [[ -f "$SCRIPT_DIR/lib/formatting.sh" ]]; then
+    source "$SCRIPT_DIR/lib/formatting.sh"
+else
+    echo "ERROR: Cannot find formatting library at $SCRIPT_DIR/lib/formatting.sh" >&2
+    exit 1
+fi
+
+print_header "Checksum Generator for CHECKSUMS.txt"
 
 OUTPUT_FILE="CHECKSUMS.txt.new"
 
@@ -35,15 +40,15 @@ SCRIPT_COUNT=0
 
 # Process lib directory
 if [ -d "lib" ]; then
-    echo -e "${GREEN}Processing lib/${NC}"
+    print_subheader "Processing lib/"
     echo "# Libraries" >> "$OUTPUT_FILE"
     
     for script in lib/*.sh; do
         if [ -f "$script" ]; then
             sha256sum "$script" >> "$OUTPUT_FILE"
             CHECKSUM=$(sha256sum "$script" | awk '{print $1}')
-            echo "  ✓ $script"
-            echo "    ${CHECKSUM:0:16}..."
+            print_success "$script"
+            print_subheader "  ${C_DIM}${CHECKSUM:0:16}...${C_RESET}"
             ((SCRIPT_COUNT++))
         fi
     done
@@ -53,15 +58,15 @@ fi
 # Process server directory
 if [ -d "server" ]; then
     echo
-    echo -e "${GREEN}Processing server/${NC}"
+    print_subheader "Processing server/"
     echo "# Server Scripts" >> "$OUTPUT_FILE"
     
     for script in server/*.sh; do
         if [ -f "$script" ]; then
             sha256sum "$script" >> "$OUTPUT_FILE"
             CHECKSUM=$(sha256sum "$script" | awk '{print $1}')
-            echo "  ✓ $script"
-            echo "    ${CHECKSUM:0:16}..."
+            print_success "$script"
+            print_subheader "  ${C_DIM}${CHECKSUM:0:16}...${C_RESET}"
             ((SCRIPT_COUNT++))
         fi
     done
@@ -71,15 +76,15 @@ fi
 # Process apps directory
 if [ -d "apps" ]; then
     echo
-    echo -e "${GREEN}Processing apps/${NC}"
+    print_subheader "Processing apps/"
     echo "# Application Scripts" >> "$OUTPUT_FILE"
     
     for script in apps/*.sh; do
         if [ -f "$script" ]; then
             sha256sum "$script" >> "$OUTPUT_FILE"
             CHECKSUM=$(sha256sum "$script" | awk '{print $1}')
-            echo "  ✓ $script"
-            echo "    ${CHECKSUM:0:16}..."
+            print_success "$script"
+            print_subheader "  ${C_DIM}${CHECKSUM:0:16}...${C_RESET}"
             ((SCRIPT_COUNT++))
         fi
     done
@@ -89,26 +94,26 @@ fi
 # Process bootstrap.sh in root
 if [ -f "bootstrap.sh" ]; then
     echo
-    echo -e "${GREEN}Processing bootstrap.sh${NC}"
+    print_subheader "Processing bootstrap.sh"
     sha256sum bootstrap.sh > bootstrap.sh.sha256
     CHECKSUM=$(cat bootstrap.sh.sha256 | awk '{print $1}')
-    echo "  ✓ bootstrap.sh"
-    echo "    ${CHECKSUM:0:16}..."
-    echo "  ✓ bootstrap.sh.sha256 (created)"
+    print_success "bootstrap.sh"
+    print_subheader "  ${C_DIM}${CHECKSUM:0:16}...${C_RESET}"
+    print_success "bootstrap.sh.sha256 (created)"
 fi
 
 echo
-echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${GREEN}✓ Generated checksums for $SCRIPT_COUNT script(s)${NC}"
+draw_separator
+print_success "Generated checksums for $SCRIPT_COUNT script(s)"
 echo
-echo -e "${YELLOW}Review the generated file:${NC}"
-echo "  cat $OUTPUT_FILE"
+print_warning "Review the generated file:"
+echo "  ${C_CYAN}cat $OUTPUT_FILE${C_RESET}"
 echo
-echo -e "${YELLOW}If it looks good, replace CHECKSUMS.txt:${NC}"
-echo "  mv $OUTPUT_FILE CHECKSUMS.txt"
+print_warning "If it looks good, replace CHECKSUMS.txt:"
+echo "  ${C_CYAN}mv $OUTPUT_FILE CHECKSUMS.txt${C_RESET}"
 echo
-echo -e "${YELLOW}Then commit:${NC}"
-echo "  git add CHECKSUMS.txt bootstrap.sh.sha256"
-echo "  git commit -m 'Update checksums'"
-echo "  git push"
-echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+print_warning "Then commit:"
+echo "  ${C_CYAN}git add CHECKSUMS.txt bootstrap.sh.sha256${C_RESET}"
+echo "  ${C_CYAN}git commit -m 'Update checksums'${C_RESET}"
+echo "  ${C_CYAN}git push${C_RESET}"
+draw_separator

@@ -1,5 +1,7 @@
 # Adding New Apps to hardening.sh - Quick Guide
 
+<a href="https://github.com/vdarkobar/lab?tab=readme-ov-file#self-hosted-homelab-cloud">back</a>  
+
 ## 🎯 Super Easy App Addition
 
 Adding a new app to the hardening script is as simple as **adding one line** to the APP_REGISTRY array!

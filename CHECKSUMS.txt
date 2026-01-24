@@ -10,10 +10,17 @@
 685d01f33ba356bf3d51e53df30bdca7706b7eb835a1bd17449e19b5fa423634  lib/formatting.sh
 
 # Server Scripts
-1d57e5963987d17ca9cf8f3b8eae495fbf88b8c516db3e55e8ea624b034289b6  server/hardening.sh
+5430bfa6d53a11b1205866afa4a797f75a3679205c82caa782b47a7f6519fb4b  server/hardening.sh
 
 # Application Scripts
 # Add your app checksums here as you create them:
-# abc123...  apps/npm.sh
-# def456...  apps/docker.sh
-# ghi789...  apps/portainer.sh
+# Example format:
+# abc123def456789...  apps/npm.sh
+# def456ghi789012...  apps/docker.sh
+# ghi789jkl012345...  apps/portainer.sh
+#
+# To add a new app:
+# 1. Create the script: vim apps/myapp.sh
+# 2. Generate checksum: sha256sum apps/myapp.sh
+# 3. Add the line above in this format: <hash>  apps/myapp.sh
+# 4. Commit both files together

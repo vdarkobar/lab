@@ -93,10 +93,11 @@ create_directories() {
         fi
     fi
     
-    mkdir -p "$INSTALL_DIR"/{lib,server,apps}
+    mkdir -p "$INSTALL_DIR"/{lib,server,apps,pve}
     print_success "Created: $INSTALL_DIR/lib"
     print_success "Created: $INSTALL_DIR/server"
     print_success "Created: $INSTALL_DIR/apps"
+    print_success "Created: $INSTALL_DIR/pve"
 }
 
 #################################################################

@@ -73,6 +73,24 @@ if [ -d "server" ]; then
     echo >> "$OUTPUT_FILE"
 fi
 
+# Process pve directory
+if [ -d "pve" ]; then
+    echo
+    print_subheader "Processing pve/"
+    echo "# PVE Scripts" >> "$OUTPUT_FILE"
+    
+    for script in pve/*.sh; do
+        if [ -f "$script" ]; then
+            sha256sum "$script" >> "$OUTPUT_FILE"
+            CHECKSUM=$(sha256sum "$script" | awk '{print $1}')
+            print_success "$script"
+            print_subheader "  ${C_DIM}${CHECKSUM:0:16}...${C_RESET}"
+            ((SCRIPT_COUNT++))
+        fi
+    done
+    echo >> "$OUTPUT_FILE"
+fi
+
 # Process apps directory
 if [ -d "apps" ]; then
     echo

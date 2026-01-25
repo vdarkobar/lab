@@ -16,8 +16,7 @@ a4514dae3d43182d52a70ed8743219dd287b566a7a528abd6998ac0c5a0e2c60  server/hardeni
 
 # PVE Scripts
 3a578e3bde95e8231d583d80cbf9aa1c602be6424812fac69626ac1dca722678  pve/debvm.sh
-# Coming soon:
-# <checksum>  pve/deblxc.sh
+ecd47529cc3b28fd99230d9b26c6c673a9966f6d717425336c23836222414819  pve/deblxc.sh
 
 # Application Scripts
 # Add your app checksums here as you create them:

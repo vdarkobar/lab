@@ -11,9 +11,13 @@
 
 # Server Scripts
 a4514dae3d43182d52a70ed8743219dd287b566a7a528abd6998ac0c5a0e2c60  server/hardening.sh
+# Coming soon:
+# <checksum>  server/jump.sh
 
 # PVE Scripts
-755dad0a06b4b914e2301dcc1edf1bdac2a4fd2b21b874f5552b92232aa24ee9  pve/template.sh
+755dad0a06b4b914e2301dcc1edf1bdac2a4fd2b21b874f5552b92232aa24ee9  pve/debvm.sh
+# Coming soon:
+# <checksum>  pve/deblxc.sh
 
 # Application Scripts
 # Add your app checksums here as you create them:

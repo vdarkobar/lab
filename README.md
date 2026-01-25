@@ -1,7 +1,6 @@
 ## *Self-hosted Home(lab) Cloud*
-
-<br>
-
+  
+  
 #### *Install <a href="https://github.com/vdarkobar/cloud/blob/main/all/debvm/setup.md"> * </a>*:
 ```bash
 # Quick Install (convenient, medium security):

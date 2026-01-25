@@ -2,20 +2,9 @@
   
 <a href="https://github.com/vdarkobar/lab/blob/main/misc/repo-setup.md#simple-repository-setup---complete-guide">*Repo setup*</a>, <a href="https://github.com/vdarkobar/lab/blob/main/misc/checksum-verification.md#checksum-verification-guide">*Checksum verification*</a>, <a href="https://github.com/vdarkobar/lab/blob/main/misc/adding-apps.md#adding-new-apps-to-hardeningsh---quick-guide">*Adding apps*</a>  
 
-  
-#### *VM Template <a href="https://raw.githubusercontent.com/vdarkobar/lab/refs/heads/main/server/debvm.sh"> * </a>*:
-```bash
-# run inside pve shell
-bash -c "$(wget -qLO - https://raw.githubusercontent.com/vdarkobar/lab/refs/heads/main/server/debvm.sh)"
-```
-  
-#### *LXC Template <a href="https://raw.githubusercontent.com/vdarkobar/lab/refs/heads/main/server/deblxc.sh"> * </a>*:
-```bash
-# run inside pve shell
-bash -c "$(wget -qLO - https://raw.githubusercontent.com/vdarkobar/lab/refs/heads/main/server/deblxc.sh)"
-```  
-  
-#### *Install services <a href="https://github.com/vdarkobar/cloud/blob/main/all/debvm/setup.md"> * </a>*:
+<br>
+
+#### *Install <a href="https://github.com/vdarkobar/cloud/blob/main/all/debvm/setup.md"> * </a>*:
 ```bash
 # Quick Install (convenient, medium security):
 bash -c "$(wget -qLO - https://raw.githubusercontent.com/vdarkobar/lab/main/bootstrap.sh)"

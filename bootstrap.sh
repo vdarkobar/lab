@@ -143,7 +143,9 @@ download_components() {
     local files=(
         "lib/formatting.sh|Formatting Library"
         "server/hardening.sh|Hardening Script"
-        "pve/template.sh|VM Template Script"
+        "server/jump.sh|Jump Server Script"
+        "pve/debvm.sh|Debian VM Template Script"
+        "pve/deblxc.sh|Debian LXC Template Script"
     )
     
     # Download each file
@@ -152,7 +154,8 @@ download_components() {
         
         print_step "Downloading $display_name..."
         if ! download_file "$REPO_URL/$file_path" "$file_path"; then
-            die "Failed to download $file_path"
+            print_warning "Optional file not available: $file_path (skipped)"
+            continue
         fi
         
         local size=$(stat -c%s "$file_path" 2>/dev/null || stat -f%z "$file_path" 2>/dev/null || echo "unknown")
@@ -213,46 +216,51 @@ show_menu() {
     print_header "What would you like to do?"
     
     echo
-    echo "1) Create Debian VM Template (runs on PVE host)"
-    echo "2) Prepare Hardening Files (for Debian 13 VM/LXC)"
-    echo "3) Exit"
+    echo "1) Create Debian VM Template (debvm.sh - runs on PVE host)"
+    echo "2) Create Debian LXC Template (deblxc.sh - runs on PVE host)"
+    echo "3) Harden Debian System (hardening.sh - runs in VM/LXC)"
+    echo "4) Exit"
     echo
     
     while true; do
-        echo -n "Select option [1-3]: "
+        echo -n "Select option [1-4]: "
         read -r choice
         
         case "$choice" in
             1)
-                run_template_creation
+                run_vm_template_creation
                 break
                 ;;
             2)
-                prepare_hardening
+                run_lxc_template_creation
                 break
                 ;;
             3)
-                print_info "Exiting"
+                run_hardening
+                break
+                ;;
+            4)
+                print_step "Exiting"
                 exit 0
                 ;;
             *)
-                print_error "Invalid choice. Please select 1, 2, or 3"
+                print_error "Invalid choice. Please select 1, 2, 3, or 4"
                 ;;
         esac
     done
 }
 
 #################################################################
-# Run Template Creation (on PVE host)                          #
+# Run VM Template Creation (on PVE host)                       #
 #################################################################
 
-run_template_creation() {
+run_vm_template_creation() {
     print_header "Creating Debian VM Template"
     
     # Check if running on Proxmox VE
     if [[ ! -f /etc/pve/.version ]]; then
         print_error "This option must run on Proxmox VE host"
-        print_info "Detected environment: Not PVE"
+        print_step "Detected environment: Not PVE"
         echo
         print_warning "To create templates, run bootstrap.sh on PVE host"
         exit 1
@@ -262,18 +270,64 @@ run_template_creation() {
     
     cd "$INSTALL_DIR/pve" || die "Cannot change to pve directory"
     
-    chmod +x template.sh
+    chmod +x debvm.sh
     
     echo
-    print_step "Launching template.sh..."
+    print_step "Launching debvm.sh..."
     echo
     
-    if ./template.sh; then
+    if ./debvm.sh; then
         echo
-        print_success "Template creation completed!"
+        print_success "VM template creation completed!"
     else
         echo
-        print_error "Template creation failed"
+        print_error "VM template creation failed"
+        exit 1
+    fi
+}
+
+#################################################################
+# Run LXC Template Creation (on PVE host)                      #
+#################################################################
+
+run_lxc_template_creation() {
+    print_header "Creating Debian LXC Template"
+    
+    # Check if running on Proxmox VE
+    if [[ ! -f /etc/pve/.version ]]; then
+        print_error "This option must run on Proxmox VE host"
+        print_step "Detected environment: Not PVE"
+        echo
+        print_warning "To create templates, run bootstrap.sh on PVE host"
+        exit 1
+    fi
+    
+    print_success "Proxmox VE detected"
+    
+    cd "$INSTALL_DIR/pve" || die "Cannot change to pve directory"
+    
+    # Check if deblxc.sh exists
+    if [[ ! -f "deblxc.sh" ]]; then
+        print_error "deblxc.sh not found"
+        print_warning "LXC template creation not yet available"
+        echo
+        print_step "Check repository for updates:"
+        echo "  https://github.com/vdarkobar/lab"
+        exit 1
+    fi
+    
+    chmod +x deblxc.sh
+    
+    echo
+    print_step "Launching deblxc.sh..."
+    echo
+    
+    if ./deblxc.sh; then
+        echo
+        print_success "LXC template creation completed!"
+    else
+        echo
+        print_error "LXC template creation failed"
         exit 1
     fi
 }
@@ -282,7 +336,7 @@ run_template_creation() {
 # Run Hardening (on Debian 13 VM/LXC)                          #
 #################################################################
 
-prepare_hardening() {
+run_hardening() {
     print_header "Server Hardening"
     
     # Check if running on Debian

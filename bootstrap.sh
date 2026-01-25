@@ -85,7 +85,7 @@ create_directories() {
         print_warning "Directory $INSTALL_DIR already exists"
         echo -n "Remove and recreate? (yes/no): "
         read -r response
-        if [[ "$response" == "yes" ]]; then
+        if [[ "$response" =~ ^[Yy](es)?$ ]]; then
             rm -rf "$INSTALL_DIR"
             print_success "Removed existing directory"
         else

@@ -257,7 +257,6 @@ show_intro() {
     print_warning "Script must run as non-root user (currently: $(whoami))"
     print_warning "User must have sudo privileges (will prompt if needed)"
     print_warning "SSH public key required for authentication"
-    print_warning "Ports 80 and 443 should be forwarded from your router"
     
     echo
     print_info "Logs will be saved to: ${C_DIM}${LOG_FILE}${C_RESET}"
@@ -1000,12 +999,6 @@ show_summary() {
     print_kv "FQDN" "$HOSTNAME.$DOMAIN_LOCAL"
     print_kv "IP Address" "$LOCAL_IP"
     print_kv "SSH User" "$(whoami)"
-    
-    echo
-    print_header "Port Forwarding Required"
-    print_subheader "Forward these ports from your router to $LOCAL_IP:"
-    print_kv "  HTTP" "80"
-    print_kv "  HTTPS" "443"
     
     echo
     print_header "Next SSH Connection"

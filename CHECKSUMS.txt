@@ -10,7 +10,10 @@
 685d01f33ba356bf3d51e53df30bdca7706b7eb835a1bd17449e19b5fa423634  lib/formatting.sh
 
 # Server Scripts
-5430bfa6d53a11b1205866afa4a797f75a3679205c82caa782b47a7f6519fb4b  server/hardening.sh
+a4514dae3d43182d52a70ed8743219dd287b566a7a528abd6998ac0c5a0e2c60  server/hardening.sh
+
+# PVE Scripts
+755dad0a06b4b914e2301dcc1edf1bdac2a4fd2b21b874f5552b92232aa24ee9  pve/template.sh
 
 # Application Scripts
 # Add your app checksums here as you create them:

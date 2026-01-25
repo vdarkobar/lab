@@ -142,6 +142,7 @@ download_components() {
     local files=(
         "lib/formatting.sh|Formatting Library"
         "server/hardening.sh|Hardening Script"
+        "pve/template.sh|VM Template Script"
     )
     
     # Download each file
@@ -204,12 +205,139 @@ verify_checksums() {
 }
 
 #################################################################
-# Run Hardening Script                                           #
+# Show Menu and Execute Choice                                  #
 #################################################################
 
-run_hardening() {
-    print_header "Starting Server Hardening"
+show_menu() {
+    print_header "What would you like to do?"
     
+    echo
+    echo "1) Create Debian VM Template (runs on PVE host)"
+    echo "2) Prepare Hardening Files (for Debian 13 VM/LXC)"
+    echo "3) Exit"
+    echo
+    
+    while true; do
+        echo -n "Select option [1-3]: "
+        read -r choice
+        
+        case "$choice" in
+            1)
+                run_template_creation
+                break
+                ;;
+            2)
+                prepare_hardening
+                break
+                ;;
+            3)
+                print_info "Exiting"
+                exit 0
+                ;;
+            *)
+                print_error "Invalid choice. Please select 1, 2, or 3"
+                ;;
+        esac
+    done
+}
+
+#################################################################
+# Run Template Creation (on PVE host)                          #
+#################################################################
+
+run_template_creation() {
+    print_header "Creating Debian VM Template"
+    
+    # Check if running on Proxmox VE
+    if [[ ! -f /etc/pve/.version ]]; then
+        print_error "This option must run on Proxmox VE host"
+        print_info "Detected environment: Not PVE"
+        echo
+        print_warning "To create templates, run bootstrap.sh on PVE host"
+        exit 1
+    fi
+    
+    print_success "Proxmox VE detected"
+    
+    cd "$INSTALL_DIR/pve" || die "Cannot change to pve directory"
+    
+    chmod +x template.sh
+    
+    echo
+    print_step "Launching template.sh..."
+    echo
+    
+    if ./template.sh; then
+        echo
+        print_success "Template creation completed!"
+    else
+        echo
+        print_error "Template creation failed"
+        exit 1
+    fi
+}
+
+#################################################################
+# Run Hardening (on Debian 13 VM/LXC)                          #
+#################################################################
+
+prepare_hardening() {
+    print_header "Server Hardening"
+    
+    # Check if running on Debian
+    if [[ ! -f /etc/debian_version ]]; then
+        print_error "This option must run on Debian system"
+        print_info "Detected: Not Debian"
+        exit 1
+    fi
+    
+    # Check Debian version
+    local debian_version=$(cat /etc/debian_version)
+    if [[ ! "$debian_version" =~ ^13 ]]; then
+        print_warning "Expected Debian 13, found version: $debian_version"
+        echo -n "Continue anyway? (yes/no): "
+        read -r response
+        if [[ "$response" != "yes" ]]; then
+            die "Hardening cancelled"
+        fi
+    else
+        print_success "Debian 13 detected"
+    fi
+    
+    # Check for sudo (required - must run as non-root user with sudo)
+    if ! command -v sudo >/dev/null 2>&1; then
+        print_error "sudo is not installed"
+        print_error "Hardening script requires sudo"
+        echo
+        print_info "Install sudo first (as root):"
+        echo "  ${C_CYAN}apt update && apt install sudo${C_RESET}"
+        echo
+        print_info "Then add your user to sudo group:"
+        echo "  ${C_CYAN}usermod -aG sudo username${C_RESET}"
+        echo
+        print_info "Then run hardening.sh as that non-root user"
+        exit 1
+    fi
+    
+    # Check if running as root (should not be)
+    if [[ $EUID -eq 0 ]]; then
+        print_error "Do not run hardening as root!"
+        print_error "Hardening must run as non-root user with sudo privileges"
+        echo
+        print_info "Create a user first (as root):"
+        echo "  ${C_CYAN}adduser username${C_RESET}"
+        echo "  ${C_CYAN}usermod -aG sudo username${C_RESET}"
+        echo
+        print_info "Then run as that user:"
+        echo "  ${C_CYAN}su - username${C_RESET}"
+        echo "  ${C_CYAN}cd ~/lab/server && ./hardening.sh${C_RESET}"
+        exit 1
+    fi
+    
+    print_success "Running as non-root user: $(whoami)"
+    print_success "sudo is available"
+    
+    # Run hardening
     cd "$INSTALL_DIR/server" || die "Cannot change to server directory"
     
     chmod +x hardening.sh
@@ -220,10 +348,10 @@ run_hardening() {
     
     if ./hardening.sh; then
         echo
-        print_success "Setup completed successfully!"
+        print_success "Hardening completed!"
     else
         echo
-        print_error "Hardening script failed"
+        print_error "Hardening failed"
         exit 1
     fi
 }
@@ -268,7 +396,9 @@ main() {
     create_directories
     download_components
     verify_checksums
-    run_hardening
+    
+    # Show menu for what to do next
+    show_menu
     
     echo
     print_success "Installation directory: $INSTALL_DIR"

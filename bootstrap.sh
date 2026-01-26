@@ -2,34 +2,34 @@
 
 #############################################################################
 # Lab Bootstrap Script                                                      #
-# Source: https://github.com/vdarkobar/lab                                 #
-#                                                                            #
+# Source: https://github.com/vdarkobar/lab                                  #
+#                                                                           #
 # This script:                                                              #
-#   1. Creates directory structure (lib/, server/, apps/)                  #
-#   2. Downloads all components from GitHub                                #
-#   3. Verifies checksums for security                                     #
-#   4. Runs hardening.sh                                                   #
-#                                                                            #
+#   1. Creates directory structure (lib/, server/, apps/)                   #
+#   2. Downloads all components from GitHub                                 #
+#   3. Verifies checksums for security                                      #
+#   4. Runs hardening.sh                                                    #
+#                                                                           #
 # INSTALLATION METHODS:                                                     #
-#                                                                            #
-# Quick Install (convenient, medium security):                             #
+#                                                                           #
+# Quick Install (convenient, medium security):                              #
 #   bash -c "$(wget -qLO - https://raw.githubusercontent.com/vdarkobar/lab/main/bootstrap.sh)"
-#                                                                            #
-# Secure Install (verified, high security - RECOMMENDED):                  #
+#                                                                           #
+# Secure Install (verified, high security - RECOMMENDED):                   #
 #   wget https://raw.githubusercontent.com/vdarkobar/lab/main/bootstrap.sh
 #   wget https://raw.githubusercontent.com/vdarkobar/lab/main/bootstrap.sh.sha256
-#   sha256sum -c bootstrap.sh.sha256                                       #
-#   chmod +x bootstrap.sh                                                  #
-#   ./bootstrap.sh                                                         #
-#                                                                            #
+#   sha256sum -c bootstrap.sh.sha256                                        #
+#   chmod +x bootstrap.sh                                                   #
+#   ./bootstrap.sh                                                          #
+#                                                                           #
 # Full source code review:                                                  #
-#   https://github.com/vdarkobar/lab/blob/main/bootstrap.sh               #
+#   https://github.com/vdarkobar/lab/blob/main/bootstrap.sh                 #
 #############################################################################
 
 set -euo pipefail
 
 #################################################################
-# Configuration                                                  #
+# Configuration                                                 #
 #################################################################
 
 readonly REPO_URL="https://raw.githubusercontent.com/vdarkobar/lab/main"
@@ -45,7 +45,7 @@ readonly C_CYAN='\033[0;36m'
 readonly C_RESET='\033[0m'
 
 #################################################################
-# Helper Functions                                               #
+# Helper Functions                                              #
 #################################################################
 
 print_header() {
@@ -69,13 +69,17 @@ print_step() {
     echo -e "${C_BLUE}→${C_RESET} $1"
 }
 
+print_info() {
+    echo -e "${C_BLUE}ℹ${C_RESET} $1"
+}
+
 die() {
     print_error "$1"
     exit 1
 }
 
 #################################################################
-# Create Directory Structure                                     #
+# Create Directory Structure                                    #
 #################################################################
 
 create_directories() {
@@ -124,7 +128,7 @@ download_file() {
 }
 
 #################################################################
-# Download and Verify Components                                 #
+# Download and Verify Components                                #
 #################################################################
 
 download_components() {
@@ -164,7 +168,7 @@ download_components() {
 }
 
 #################################################################
-# Verify Checksums                                               #
+# Verify Checksums                                              #
 #################################################################
 
 verify_checksums() {
@@ -251,7 +255,7 @@ show_menu() {
 }
 
 #################################################################
-# Run VM Template Creation (on PVE host)                       #
+# Run VM Template Creation (on PVE host)                        #
 #################################################################
 
 run_vm_template_creation() {
@@ -287,7 +291,7 @@ run_vm_template_creation() {
 }
 
 #################################################################
-# Run LXC Template Creation (on PVE host)                      #
+# Run LXC Template Creation (on PVE host)                       #
 #################################################################
 
 run_lxc_template_creation() {
@@ -333,7 +337,7 @@ run_lxc_template_creation() {
 }
 
 #################################################################
-# Run Hardening (on Debian 13 VM/LXC)                          #
+# Run Hardening (on Debian 13 VM/LXC)                           #
 #################################################################
 
 run_hardening() {
@@ -412,7 +416,7 @@ run_hardening() {
 }
 
 #################################################################
-# Cleanup on Error                                               #
+# Cleanup on Error                                              #
 #################################################################
 
 cleanup() {
@@ -428,7 +432,7 @@ cleanup() {
 trap cleanup EXIT
 
 #################################################################
-# Main Function                                                  #
+# Main Function                                                 #
 #################################################################
 
 main() {

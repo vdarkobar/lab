@@ -10,7 +10,7 @@
 685d01f33ba356bf3d51e53df30bdca7706b7eb835a1bd17449e19b5fa423634  lib/formatting.sh
 
 # Server Scripts
-c9014bede1e28974259bbf828a8aff277c187a069a957f73bd79835233f12206  server/hardening.sh
+224673b1c8752ee8eee02cd72ff982bc6670f73d3ebc4d59528995efc083e46a  server/hardening.sh
 01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b  server/jump.sh
 
 # PVE Scripts

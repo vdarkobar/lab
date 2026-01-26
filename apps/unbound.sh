@@ -1273,7 +1273,7 @@ main() {
     clear
     
     echo -e "${C_CYAN:-\033[0;36m}╔════════════════════════════════════════════════════════════╗${C_RESET:-\033[0m}"
-    echo -e "${C_CYAN:-\033[0;36m}║          Unbound DNS Resolver Installer v${VERSION}        ║${C_RESET:-\033[0m}"
+    echo -e "${C_CYAN:-\033[0;36m}║          Unbound DNS Resolver Installer v${VERSION}          ║${C_RESET:-\033[0m}"
     echo -e "${C_CYAN:-\033[0;36m}║          https://github.com/vdarkobar/lab                  ║${C_RESET:-\033[0m}"
     echo -e "${C_CYAN:-\033[0;36m}╚════════════════════════════════════════════════════════════╝${C_RESET:-\033[0m}"
     
@@ -1299,5 +1299,38 @@ main() {
     prompt_reboot
 }
 
-# Run main
-main "$@"
+# Argument handling
+case "${1:-}" in
+    --configure|--config|-c)
+        setup_logging
+        post_install_config
+        ;;
+    --vlans)
+        setup_logging
+        configure_vlans
+        ;;
+    --hosts)
+        setup_logging
+        configure_static_hosts
+        ;;
+    --help|-h)
+        echo "Unbound DNS Resolver Installer v${VERSION}"
+        echo
+        echo "Usage: $0 [OPTION]"
+        echo
+        echo "Options:"
+        echo "  (none)        Full installation"
+        echo "  --configure   Run configuration menu (VLANs, hosts)"
+        echo "  --vlans       Configure VLAN access control only"
+        echo "  --hosts       Configure static DNS hosts only"
+        echo "  --help        Show this help"
+        echo
+        echo "Examples:"
+        echo "  $0              # Fresh install"
+        echo "  $0 --hosts      # Add/update static DNS records"
+        echo "  $0 --vlans      # Add/update allowed subnets"
+        ;;
+    *)
+        main "$@"
+        ;;
+esac

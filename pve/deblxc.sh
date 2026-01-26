@@ -1,602 +1,721 @@
 #!/bin/bash
 
-###################################################################################
-# Proxmox LXC Template Creator - Debian                                          #
-###################################################################################
-#
-# DESCRIPTION:
-#   Creates a Proxmox LXC template from Debian images with security
-#   hardening, cloud-init support, and proper user configuration.
-#
-# LOCATION: lab/pve/deblxc.sh
-# REPOSITORY: https://github.com/vdarkobar/lab
-#
-# USAGE:
-#   Interactive mode:
-#     ./deblxc.sh
-#
-#   Non-interactive mode:
-#     CT_USERNAME=admin CT_PASSWORD='pass' ./deblxc.sh
-#
-# VERSION: 2.0.0
-# LICENSE: MIT
-#
-###################################################################################
+#############################################################################
+# Debian LXC Template Creator for Proxmox VE                                #
+# Source: https://github.com/vdarkobar/lab                                  #
+#                                                                           #
+# This script:                                                              #
+#   1. Downloads the latest Debian LXC template                             #
+#   2. Creates an unprivileged container with nesting                       #
+#   3. Configures non-root user with sudo                                   #
+#   4. Sets up Cloud-Init for SSH key regeneration                          #
+#   5. Converts the container to a reusable template                        #
+#                                                                           #
+# REQUIREMENTS:                                                             #
+#   - Proxmox VE host                                                       #
+#   - SSH keys at /root/.ssh/authorized_keys                                #
+#   - Storage configured for templates and rootfs                           #
+#                                                                           #
+# ENVIRONMENT VARIABLES (for non-interactive mode):                         #
+#   DEBLXC_TEMPLATE_STORAGE  - Storage for templates (e.g., "local")        #
+#   DEBLXC_ROOTFS_STORAGE    - Storage for rootfs (e.g., "local-lvm")       #
+#   DEBLXC_CONTAINER_ID      - Container ID (e.g., "9000")                  #
+#   DEBLXC_HOSTNAME          - Container hostname (e.g., "deblxc")          #
+#   DEBLXC_USERNAME          - Non-root username                            #
+#   DEBLXC_PASSWORD          - User password                                #
+#   DEBLXC_BRIDGE            - Network bridge (e.g., "vmbr0")               #
+#   DEBLXC_CORES             - CPU cores (default: 4)                       #
+#   DEBLXC_MEMORY            - Memory in MB (default: 4096)                 #
+#   DEBLXC_DISK              - Disk size in GB (default: 8)                 #
+#############################################################################
 
-set -euo pipefail
+set -Eeuo pipefail
 
-###################################################################################
-# CONFIGURATION
-###################################################################################
+#################################################################
+# Resolve Script Directory and Load Formatting Library          #
+#################################################################
 
-readonly SCRIPT_VERSION="2.0.0"
-readonly SCRIPT_NAME="$(basename "${BASH_SOURCE[0]}")"
-readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-# Source formatting library
-if [[ -f "${SCRIPT_DIR}/../lib/formatting.sh" ]]; then
-    source "${SCRIPT_DIR}/../lib/formatting.sh"
+# Try multiple locations for formatting library
+if [[ -f "$REPO_ROOT/lib/formatting.sh" ]]; then
+    source "$REPO_ROOT/lib/formatting.sh"
+elif [[ -f "$SCRIPT_DIR/../lib/formatting.sh" ]]; then
+    source "$SCRIPT_DIR/../lib/formatting.sh"
+elif [[ -f "/root/lab/lib/formatting.sh" ]]; then
+    source "/root/lab/lib/formatting.sh"
 else
-    echo "ERROR: formatting.sh not found at ${SCRIPT_DIR}/../lib/formatting.sh" >&2
-    exit 1
+    # Minimal fallback formatting
+    C_GREEN='\033[0;32m'
+    C_RED='\033[0;31m'
+    C_YELLOW='\033[0;33m'
+    C_CYAN='\033[0;36m'
+    C_RESET='\033[0m'
+    print_header() { echo -e "\n${C_CYAN}━━━ $1 ━━━${C_RESET}"; }
+    print_success() { echo -e "${C_GREEN}✓${C_RESET} $1"; }
+    print_error() { echo -e "${C_RED}✗${C_RESET} $1" >&2; }
+    print_warning() { echo -e "${C_YELLOW}⚠${C_RESET} $1"; }
+    print_info() { echo -e "${C_CYAN}ℹ${C_RESET} $1"; }
+    draw_separator() { echo -e "${C_CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"; }
 fi
 
-# Set up logging
-readonly LOG_DIR="/var/log/lab"
-readonly LOG_FILE="${LOG_DIR}/deblxc-$(date +%Y%m%d-%H%M%S).log"
-mkdir -p "$LOG_DIR"
+#################################################################
+# Configuration                                                 #
+#################################################################
 
-# Default configuration
-readonly DEFAULT_HOSTNAME="deblxc"
-readonly DEFAULT_CORES=4
-readonly DEFAULT_MEMORY=4096
-readonly DEFAULT_SWAP=512
-readonly DEFAULT_DISK=8
-readonly DEFAULT_BRIDGE="vmbr0"
-readonly MIN_PASSWORD_LENGTH=8
+readonly LOG_DIR="/var/log/lab"
+readonly LOG_FILE="$LOG_DIR/deblxc.log"
+readonly VERSION="1.0.0"
+
+# Defaults (can be overridden via environment variables)
+DEFAULT_HOSTNAME="deblxc"
+DEFAULT_BRIDGE="vmbr0"
+DEFAULT_CORES="${DEBLXC_CORES:-4}"
+DEFAULT_MEMORY="${DEBLXC_MEMORY:-4096}"
+DEFAULT_SWAP="512"
+DEFAULT_DISK="${DEBLXC_DISK:-8}"
 
 # Reserved hostnames
-readonly RESERVED_NAMES=(
-    "localhost" "domain" "local" "host" "broadcasthost" 
-    "localdomain" "loopback" "wpad" "gateway" "dns" 
-    "mail" "ftp" "web" "router" "proxy"
-)
+RESERVED_NAMES=("localhost" "domain" "local" "host" "broadcasthost" "localdomain" "loopback" "wpad" "gateway" "dns" "mail" "ftp" "web")
 
-# Global variables
-CREATED_CT_ID=""
-IS_INTERACTIVE=true
+#################################################################
+# Logging Functions                                             #
+#################################################################
 
-###################################################################################
-# UTILITY FUNCTIONS
-###################################################################################
-
-show_header() {
-    draw_box "Proxmox LXC Template Creator v${SCRIPT_VERSION}"
-    log INFO "Creates security-hardened Debian LXC templates"
-    echo
+setup_logging() {
+    mkdir -p "$LOG_DIR"
+    exec > >(tee -a "$LOG_FILE") 2>&1
+    echo "========================================" >> "$LOG_FILE"
+    echo "deblxc.sh started at $(date)" >> "$LOG_FILE"
+    echo "========================================" >> "$LOG_FILE"
 }
 
-detect_interactive_mode() {
-    if [[ -n "${CT_USERNAME:-}" ]] && [[ -n "${CT_PASSWORD:-}" ]]; then
-        IS_INTERACTIVE=false
-        log INFO "Running in non-interactive mode"
-    else
-        IS_INTERACTIVE=true
-        log INFO "Running in interactive mode"
-    fi
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
 }
 
-check_privileges() {
-    if [[ "$EUID" -ne 0 ]]; then
-        die "This script must be run as root or with sudo"
-    fi
-}
-
-check_environment() {
-    if [[ -f /proc/1/cgroup ]] && grep -q "/lxc/" /proc/1/cgroup 2>/dev/null; then
-        die "Cannot run LXC template creator inside an LXC container"
-    fi
-    
-    if ! command -v pct >/dev/null 2>&1; then
-        die "Proxmox VE environment not detected (pct command not found)"
-    fi
-}
-
-check_dependencies() {
-    log STEP "Checking dependencies"
-    
-    local missing_deps=()
-    local required_commands=(
-        "pct" "pvesm" "pvesh" "pveam" "awk" "grep" "sed"
-    )
-    
-    for cmd in "${required_commands[@]}"; do
-        if ! command -v "$cmd" >/dev/null 2>&1; then
-            missing_deps+=("$cmd")
-        fi
-    done
-    
-    [[ ${#missing_deps[@]} -gt 0 ]] && die "Missing commands: ${missing_deps[*]}"
-    
-    log SUCCESS "All dependencies satisfied"
-}
+#################################################################
+# Cleanup and Error Handling                                    #
+#################################################################
 
 cleanup() {
     local exit_code=$?
-    
-    if [[ $exit_code -ne 0 ]] && [[ -n "$CREATED_CT_ID" ]]; then
-        log WARN "Script failed after creating container $CREATED_CT_ID"
-        log INFO "Remove with: pct destroy $CREATED_CT_ID"
+    if [[ $exit_code -ne 0 ]]; then
+        echo
+        print_error "Script failed with exit code: $exit_code"
+        print_warning "Check log file: $LOG_FILE"
+        
+        # Clean up partial container if it exists and failed
+        if [[ -n "${CONTAINER_ID:-}" ]] && pct status "$CONTAINER_ID" &>/dev/null; then
+            print_warning "Partial container $CONTAINER_ID may exist - check manually"
+        fi
     fi
-    
-    exit $exit_code
+    log "Script exited with code: $exit_code"
 }
 
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
 
-###################################################################################
-# VALIDATION FUNCTIONS
-###################################################################################
+die() {
+    print_error "$1"
+    exit 1
+}
+
+#################################################################
+# Validation Functions                                          #
+#################################################################
 
 is_reserved_hostname() {
-    local hostname="$1"
+    local input_name="$1"
     for name in "${RESERVED_NAMES[@]}"; do
-        [[ "${hostname,,}" = "${name,,}" ]] && return 0
+        if [[ "$input_name" == "$name" ]]; then
+            return 0
+        fi
     done
     return 1
 }
 
 validate_hostname() {
     local hostname="$1"
-    is_reserved_hostname "$hostname" && log ERROR "Reserved hostname: $hostname" && return 1
-    [[ ! "$hostname" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$ ]] && log ERROR "Invalid hostname: $hostname" && return 1
-    return 0
+    
+    if is_reserved_hostname "$hostname"; then
+        return 1
+    fi
+    
+    if [[ "$hostname" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$ ]]; then
+        return 0
+    fi
+    
+    return 1
 }
 
 validate_username() {
     local username="$1"
-    [[ "$username" == "root" ]] && log ERROR "Username 'root' is not allowed" && return 1
-    [[ ! "$username" =~ ^[a-z_][a-z0-9_-]{2,15}$ ]] && log ERROR "Invalid username: $username" && return 1
-    return 0
+    
+    if [[ "$username" == "root" ]]; then
+        return 1
+    fi
+    
+    if [[ "$username" =~ ^[a-z_][a-z0-9_-]*$ ]]; then
+        return 0
+    fi
+    
+    return 1
 }
 
 validate_password() {
     local password="$1"
-    [[ ${#password} -lt $MIN_PASSWORD_LENGTH ]] && log ERROR "Password must be at least ${MIN_PASSWORD_LENGTH} characters" && return 1
-    [[ ! "$password" =~ [0-9] ]] && log ERROR "Password must contain at least one number" && return 1
-    [[ ! "$password" =~ [^a-zA-Z0-9] ]] && log ERROR "Password must contain at least one special character" && return 1
+    
+    # Minimum 8 characters
+    if [[ ${#password} -lt 8 ]]; then
+        return 1
+    fi
+    
+    # Must contain at least one number
+    if ! [[ "$password" =~ [0-9] ]]; then
+        return 1
+    fi
+    
+    # Must contain at least one special character
+    if ! [[ "$password" =~ [^a-zA-Z0-9] ]]; then
+        return 1
+    fi
+    
     return 0
 }
 
-validate_memory() {
-    local memory="$1"
-    [[ ! "$memory" =~ ^[0-9]+$ ]] && log ERROR "Memory must be a number" && return 1
-    [[ "$memory" -lt 512 ]] && log ERROR "Memory must be at least 512MB" && return 1
-    return 0
-}
+#################################################################
+# Preflight Checks                                              #
+#################################################################
 
-validate_cores() {
-    local cores="$1"
-    local max_cores=$(nproc)
-    [[ ! "$cores" =~ ^[0-9]+$ ]] && log ERROR "Cores must be a number" && return 1
-    [[ "$cores" -lt 1 ]] && log ERROR "Must have at least 1 core" && return 1
-    [[ "$cores" -gt "$max_cores" ]] && log ERROR "Cores exceed $max_cores" && return 1
-    return 0
-}
-
-check_ct_exists() {
-    local ct_id="$1"
-    pct status "$ct_id" >/dev/null 2>&1 && log ERROR "Container $ct_id already exists" && return 1
-    return 0
-}
-
-###################################################################################
-# INPUT FUNCTIONS
-###################################################################################
-
-get_next_ct_id() { pvesh get /cluster/nextid 2>/dev/null || echo "100"; }
-get_network_bridges() { ip -o link show | awk -F': ' '{print $2}' | grep '^vmbr' || echo "vmbr0"; }
-get_template_storages() { pvesm status -content vztmpl 2>/dev/null | awk 'NR>1 {print $1}' || echo "local"; }
-get_rootfs_storages() { pvesm status -content rootdir 2>/dev/null | awk 'NR>1 {print $1}' || echo "local-lvm"; }
-
-prompt_ct_id() {
-    local default_id=$(get_next_ct_id)
-    echo >&2
-    print_info "Next available CT ID: $default_id" >&2
-    read -p "Enter Container ID [default: $default_id]: " -r ct_id
-    ct_id="${ct_id:-$default_id}"
-    [[ ! "$ct_id" =~ ^[0-9]+$ ]] && log ERROR "Container ID must be a number" && return 1
-    check_ct_exists "$ct_id" || return 1
-    echo "$ct_id"
-}
-
-prompt_hostname() {
-    while true; do
-        echo >&2
-        read -p "Enter hostname [default: $DEFAULT_HOSTNAME]: " -r hostname
-        hostname="${hostname:-$DEFAULT_HOSTNAME}"
-        validate_hostname "$hostname" && echo "$hostname" && return 0
+preflight_checks() {
+    print_header "Preflight Checks"
+    
+    # Check if running on Proxmox VE
+    if [[ ! -f /etc/pve/.version ]]; then
+        die "This script must run on a Proxmox VE host"
+    fi
+    print_success "Proxmox VE detected"
+    
+    # Check if running as root
+    if [[ $EUID -ne 0 ]]; then
+        die "This script must run as root"
+    fi
+    print_success "Running as root"
+    
+    # Check for required commands
+    local required_cmds=("pct" "pvesm" "pveam" "pvesh")
+    for cmd in "${required_cmds[@]}"; do
+        if ! command -v "$cmd" &>/dev/null; then
+            die "Required command not found: $cmd"
+        fi
     done
-}
-
-prompt_username() {
-    while true; do
-        echo >&2
-        read -p "Enter username for non-root user: " -r username
-        [[ -z "$username" ]] && log ERROR "Username cannot be empty" && continue
-        validate_username "$username" && echo "$username" && return 0
-    done
-}
-
-prompt_password() {
-    while true; do
-        echo >&2
-        read -p "Enter password: " -rs password
-        echo >&2
-        [[ -z "$password" ]] && log ERROR "Password cannot be empty" && continue
-        validate_password "$password" || continue
-        read -p "Confirm password: " -rs password_confirm
-        echo >&2
-        [[ "$password" = "$password_confirm" ]] && echo "$password" && return 0
-        log ERROR "Passwords do not match"
-    done
-}
-
-prompt_memory() {
-    echo >&2
-    read -p "Enter memory in MB [default: $DEFAULT_MEMORY]: " -r memory
-    memory="${memory:-$DEFAULT_MEMORY}"
-    validate_memory "$memory" || return 1
-    echo "$memory"
-}
-
-prompt_cores() {
-    local max_cores=$(nproc)
-    echo >&2
-    print_info "Cores range: 1 to $max_cores" >&2
-    read -p "Enter cores [default: $DEFAULT_CORES]: " -r cores
-    cores="${cores:-$DEFAULT_CORES}"
-    validate_cores "$cores" || return 1
-    echo "$cores"
-}
-
-prompt_bridge() {
-    local bridges
-    mapfile -t bridges < <(get_network_bridges)
-    [[ ${#bridges[@]} -eq 0 ]] && log ERROR "No bridges found" && return 1
+    print_success "Required commands available"
     
-    echo >&2
-    print_info "Available bridges:" >&2
-    printf '%s\n' "${bridges[@]}" | nl -s ') ' >&2
-    read -p "Enter bridge [default: $DEFAULT_BRIDGE]: " -r bridge_input
-    local bridge="${bridge_input:-$DEFAULT_BRIDGE}"
-    
-    [[ "$bridge_input" =~ ^[0-9]+$ ]] && bridge="${bridges[$((bridge_input-1))]}"
-    printf '%s\n' "${bridges[@]}" | grep -qx "$bridge" || { log ERROR "Invalid bridge"; return 1; }
-    echo "$bridge"
-}
-
-prompt_template_storage() {
-    local storages
-    mapfile -t storages < <(get_template_storages)
-    [[ ${#storages[@]} -eq 0 ]] && log ERROR "No template storage found" && return 1
-    
-    echo >&2
-    print_info "Available template storages:" >&2
-    printf '%s\n' "${storages[@]}" | nl -s ') ' >&2
-    local default_storage="${storages[0]}"
-    read -p "Select template storage [default: $default_storage]: " -r storage_input
-    local storage="${storage_input:-$default_storage}"
-    
-    [[ "$storage_input" =~ ^[0-9]+$ ]] && storage="${storages[$((storage_input-1))]}"
-    printf '%s\n' "${storages[@]}" | grep -qx "$storage" || { log ERROR "Invalid storage"; return 1; }
-    echo "$storage"
-}
-
-prompt_rootfs_storage() {
-    local storages
-    mapfile -t storages < <(get_rootfs_storages)
-    [[ ${#storages[@]} -eq 0 ]] && log ERROR "No rootfs storage found" && return 1
-    
-    echo >&2
-    print_info "Available rootfs storages:" >&2
-    printf '%s\n' "${storages[@]}" | nl -s ') ' >&2
-    local default_storage="${storages[0]}"
-    read -p "Select rootfs storage [default: $default_storage]: " -r storage_input
-    local storage="${storage_input:-$default_storage}"
-    
-    [[ "$storage_input" =~ ^[0-9]+$ ]] && storage="${storages[$((storage_input-1))]}"
-    printf '%s\n' "${storages[@]}" | grep -qx "$storage" || { log ERROR "Invalid storage"; return 1; }
-    echo "$storage"
-}
-
-###################################################################################
-# CONFIGURATION GATHERING
-###################################################################################
-
-gather_configuration() {
-    log STEP "Gathering configuration"
-    
-    if [[ "$IS_INTERACTIVE" = true ]]; then
-        CT_ID=$(prompt_ct_id) || exit 2
-        CT_HOSTNAME=$(prompt_hostname) || exit 2
-        CT_USERNAME=$(prompt_username) || exit 2
-        CT_PASSWORD=$(prompt_password) || exit 2
-        CT_MEMORY=$(prompt_memory) || exit 2
-        CT_CORES=$(prompt_cores) || exit 2
-        CT_BRIDGE=$(prompt_bridge) || exit 2
-        TEMPLATE_STORAGE=$(prompt_template_storage) || exit 2
-        ROOTFS_STORAGE=$(prompt_rootfs_storage) || exit 2
+    # Check for SSH keys
+    if [[ ! -f /root/.ssh/authorized_keys ]]; then
+        print_warning "No SSH keys found at /root/.ssh/authorized_keys"
+        print_warning "Container will be created without SSH key injection"
+        SSH_KEYS_AVAILABLE=false
     else
-        CT_ID="${CT_ID:-$(get_next_ct_id)}"
-        CT_HOSTNAME="${CT_HOSTNAME:-$DEFAULT_HOSTNAME}"
-        CT_MEMORY="${CT_MEMORY:-$DEFAULT_MEMORY}"
-        CT_CORES="${CT_CORES:-$DEFAULT_CORES}"
-        CT_BRIDGE="${CT_BRIDGE:-$DEFAULT_BRIDGE}"
-        TEMPLATE_STORAGE="${TEMPLATE_STORAGE:-$(get_template_storages | head -n1)}"
-        ROOTFS_STORAGE="${ROOTFS_STORAGE:-$(get_rootfs_storages | head -n1)}"
-        
-        [[ -z "$CT_USERNAME" ]] && die "CT_USERNAME required in non-interactive mode"
-        [[ -z "$CT_PASSWORD" ]] && die "CT_PASSWORD required in non-interactive mode"
-        
-        check_ct_exists "$CT_ID" || exit 2
-        validate_hostname "$CT_HOSTNAME" || exit 2
-        validate_username "$CT_USERNAME" || exit 2
-        validate_password "$CT_PASSWORD" || exit 2
-        validate_memory "$CT_MEMORY" || exit 2
-        validate_cores "$CT_CORES" || exit 2
+        print_success "SSH keys found"
+        SSH_KEYS_AVAILABLE=true
     fi
     
-    log SUCCESS "Configuration gathered"
+    log "Preflight checks passed"
 }
 
-show_configuration_summary() {
-    echo
-    print_header "Configuration Summary"
-    print_kv "Container ID" "$CT_ID"
-    print_kv "Hostname" "$CT_HOSTNAME"
-    print_kv "Username" "$CT_USERNAME"
-    print_kv "Memory" "${CT_MEMORY}MB"
-    print_kv "Cores" "$CT_CORES"
-    print_kv "Swap" "${DEFAULT_SWAP}MB"
-    print_kv "Disk" "${DEFAULT_DISK}GB"
-    print_kv "Network" "$CT_BRIDGE"
-    print_kv "Template Storage" "$TEMPLATE_STORAGE"
-    print_kv "Rootfs Storage" "$ROOTFS_STORAGE"
+#################################################################
+# Storage Selection                                             #
+#################################################################
+
+select_template_storage() {
+    print_header "Template Storage Selection"
+    
+    local storage_list
+    storage_list=$(pvesm status -content vztmpl | awk 'NR>1 {print NR-1 " " $1}')
+    
+    if [[ -z "$storage_list" ]]; then
+        die "No template storage found"
+    fi
+    
+    # Non-interactive mode
+    if [[ -n "${DEBLXC_TEMPLATE_STORAGE:-}" ]]; then
+        if echo "$storage_list" | grep -qw "$DEBLXC_TEMPLATE_STORAGE"; then
+            TEMPLATE_STORAGE="$DEBLXC_TEMPLATE_STORAGE"
+            print_success "Using template storage: $TEMPLATE_STORAGE"
+            return 0
+        else
+            die "Specified template storage not found: $DEBLXC_TEMPLATE_STORAGE"
+        fi
+    fi
+    
+    # Interactive mode
+    print_info "Available template storage:"
+    echo "$storage_list"
     echo
     
-    if [[ "$IS_INTERACTIVE" = true ]]; then
-        read -p "Proceed? [Y/n]: " -r confirm
-        [[ "$confirm" =~ ^[Nn] ]] && log INFO "Cancelled" && exit 0
-    fi
+    local default_storage
+    default_storage=$(echo "$storage_list" | awk 'NR==1 {print $2}')
+    
+    while true; do
+        echo -ne "Select template storage [default: $default_storage]: "
+        read -r selection
+        selection=${selection:-1}
+        
+        if [[ "$selection" =~ ^[0-9]+$ ]]; then
+            TEMPLATE_STORAGE=$(echo "$storage_list" | awk -v num="$selection" '$1 == num {print $2}')
+        else
+            TEMPLATE_STORAGE="$selection"
+        fi
+        
+        if [[ -n "$TEMPLATE_STORAGE" ]] && echo "$storage_list" | grep -qw "$TEMPLATE_STORAGE"; then
+            print_success "Selected template storage: $TEMPLATE_STORAGE"
+            break
+        else
+            print_error "Invalid selection, please try again"
+        fi
+    done
 }
 
-###################################################################################
-# TEMPLATE DOWNLOAD
-###################################################################################
+select_rootfs_storage() {
+    print_header "Rootfs Storage Selection"
+    
+    local storage_list
+    storage_list=$(pvesm status -content rootdir | awk 'NR>1 {print NR-1 " " $1}')
+    
+    if [[ -z "$storage_list" ]]; then
+        die "No rootfs storage found"
+    fi
+    
+    # Non-interactive mode
+    if [[ -n "${DEBLXC_ROOTFS_STORAGE:-}" ]]; then
+        if echo "$storage_list" | grep -qw "$DEBLXC_ROOTFS_STORAGE"; then
+            ROOTFS_STORAGE="$DEBLXC_ROOTFS_STORAGE"
+            print_success "Using rootfs storage: $ROOTFS_STORAGE"
+            return 0
+        else
+            die "Specified rootfs storage not found: $DEBLXC_ROOTFS_STORAGE"
+        fi
+    fi
+    
+    # Interactive mode
+    print_info "Available rootfs storage:"
+    echo "$storage_list"
+    echo
+    
+    local default_storage
+    default_storage=$(echo "$storage_list" | awk 'NR==1 {print $2}')
+    
+    while true; do
+        echo -ne "Select rootfs storage [default: $default_storage]: "
+        read -r selection
+        selection=${selection:-1}
+        
+        if [[ "$selection" =~ ^[0-9]+$ ]]; then
+            ROOTFS_STORAGE=$(echo "$storage_list" | awk -v num="$selection" '$1 == num {print $2}')
+        else
+            ROOTFS_STORAGE="$selection"
+        fi
+        
+        if [[ -n "$ROOTFS_STORAGE" ]] && echo "$storage_list" | grep -qw "$ROOTFS_STORAGE"; then
+            print_success "Selected rootfs storage: $ROOTFS_STORAGE"
+            break
+        else
+            print_error "Invalid selection, please try again"
+        fi
+    done
+}
 
-download_debian_template() {
-    local storage="$1"
+#################################################################
+# Container Configuration                                       #
+#################################################################
+
+select_container_id() {
+    print_header "Container ID Selection"
     
-    log STEP "Downloading Debian LXC template"
+    local next_id
+    next_id=$(pvesh get /cluster/nextid) || die "Failed to get next container ID"
     
-    print_subheader "Updating template list..."
-    if ! pveam update 2>&1 | tee -a "$LOG_FILE"; then
-        die "Failed to update template list"
-    fi
-    
-    print_subheader "Finding latest Debian template..."
-    local template_name=$(pveam available --section system | awk '/debian/ {print $2}' | sort -V | tail -n 1)
-    
-    if [[ -z "$template_name" ]]; then
-        die "No Debian templates available"
-    fi
-    
-    log INFO "Latest template: $template_name"
-    
-    # Check if already downloaded
-    if pvesm list "$storage" 2>/dev/null | grep -q "$template_name"; then
-        log SUCCESS "Template already downloaded: $template_name"
-        echo "$template_name"
+    # Non-interactive mode
+    if [[ -n "${DEBLXC_CONTAINER_ID:-}" ]]; then
+        if pct status "$DEBLXC_CONTAINER_ID" &>/dev/null; then
+            die "Container ID already exists: $DEBLXC_CONTAINER_ID"
+        fi
+        CONTAINER_ID="$DEBLXC_CONTAINER_ID"
+        print_success "Using container ID: $CONTAINER_ID"
         return 0
     fi
     
-    print_subheader "Downloading $template_name to $storage..."
-    if ! pveam download "$storage" "$template_name" 2>&1 | tee -a "$LOG_FILE"; then
+    # Interactive mode
+    print_info "Next available container ID: $next_id"
+    echo -ne "Enter container ID [default: $next_id]: "
+    read -r selection
+    CONTAINER_ID="${selection:-$next_id}"
+    
+    if pct status "$CONTAINER_ID" &>/dev/null; then
+        die "Container ID already exists: $CONTAINER_ID"
+    fi
+    
+    print_success "Selected container ID: $CONTAINER_ID"
+}
+
+select_hostname() {
+    print_header "Hostname Configuration"
+    
+    # Non-interactive mode
+    if [[ -n "${DEBLXC_HOSTNAME:-}" ]]; then
+        if validate_hostname "$DEBLXC_HOSTNAME"; then
+            HOSTNAME="$DEBLXC_HOSTNAME"
+            print_success "Using hostname: $HOSTNAME"
+            return 0
+        else
+            die "Invalid hostname: $DEBLXC_HOSTNAME"
+        fi
+    fi
+    
+    # Interactive mode
+    while true; do
+        echo -ne "Enter hostname [default: $DEFAULT_HOSTNAME]: "
+        read -r selection
+        HOSTNAME="${selection:-$DEFAULT_HOSTNAME}"
+        
+        if is_reserved_hostname "$HOSTNAME"; then
+            print_error "Invalid hostname: reserved name"
+        elif validate_hostname "$HOSTNAME"; then
+            print_success "Selected hostname: $HOSTNAME"
+            break
+        else
+            print_error "Invalid hostname format (use alphanumeric and hyphens)"
+        fi
+    done
+}
+
+select_user_credentials() {
+    print_header "User Configuration"
+    
+    # Non-interactive mode
+    if [[ -n "${DEBLXC_USERNAME:-}" ]] && [[ -n "${DEBLXC_PASSWORD:-}" ]]; then
+        if ! validate_username "$DEBLXC_USERNAME"; then
+            die "Invalid username: $DEBLXC_USERNAME"
+        fi
+        if ! validate_password "$DEBLXC_PASSWORD"; then
+            die "Invalid password: must be 8+ chars with number and special character"
+        fi
+        USERNAME="$DEBLXC_USERNAME"
+        PASSWORD="$DEBLXC_PASSWORD"
+        print_success "Using username: $USERNAME"
+        print_success "Password validated"
+        return 0
+    fi
+    
+    # Interactive mode - Username
+    while true; do
+        echo -ne "Enter username for non-root user: "
+        read -r USERNAME
+        
+        if [[ "$USERNAME" == "root" ]]; then
+            print_error "Username 'root' is not allowed"
+        elif validate_username "$USERNAME"; then
+            print_success "Username accepted: $USERNAME"
+            break
+        else
+            print_error "Invalid username (use lowercase, digits, dashes, underscores)"
+        fi
+    done
+    
+    # Interactive mode - Password
+    while true; do
+        echo -ne "Enter password for '$USERNAME': "
+        read -rs PASSWORD
+        echo
+        
+        echo -ne "Confirm password: "
+        read -rs PASSWORD2
+        echo
+        
+        if [[ "$PASSWORD" != "$PASSWORD2" ]]; then
+            print_error "Passwords do not match"
+        elif ! validate_password "$PASSWORD"; then
+            print_error "Password must be 8+ chars with at least one number and special character"
+        else
+            print_success "Password accepted"
+            break
+        fi
+    done
+}
+
+select_network_bridge() {
+    print_header "Network Configuration"
+    
+    local bridges
+    bridges=$(ip -o link show | awk -F': ' '{print $2}' | grep '^vmbr' || true)
+    
+    if [[ -z "$bridges" ]]; then
+        die "No network bridges found (vmbr*)"
+    fi
+    
+    # Non-interactive mode
+    if [[ -n "${DEBLXC_BRIDGE:-}" ]]; then
+        if echo "$bridges" | grep -qw "$DEBLXC_BRIDGE"; then
+            BRIDGE="$DEBLXC_BRIDGE"
+            print_success "Using network bridge: $BRIDGE"
+            return 0
+        else
+            die "Specified bridge not found: $DEBLXC_BRIDGE"
+        fi
+    fi
+    
+    # Interactive mode
+    print_info "Available network bridges:"
+    echo "$bridges" | nl -s ') '
+    echo
+    
+    echo -ne "Enter network bridge [default: $DEFAULT_BRIDGE]: "
+    read -r selection
+    selection="${selection:-$DEFAULT_BRIDGE}"
+    
+    if [[ "$selection" =~ ^[0-9]+$ ]]; then
+        BRIDGE=$(echo "$bridges" | sed -n "${selection}p")
+    else
+        BRIDGE="$selection"
+    fi
+    
+    if [[ -z "$BRIDGE" ]] || ! echo "$bridges" | grep -qw "$BRIDGE"; then
+        BRIDGE="$DEFAULT_BRIDGE"
+    fi
+    
+    print_success "Selected network bridge: $BRIDGE"
+}
+
+#################################################################
+# Template Download                                             #
+#################################################################
+
+download_template() {
+    print_header "Downloading Debian Template"
+    
+    # Update template list
+    print_info "Updating template list..."
+    if ! pveam update; then
+        die "Failed to update template list"
+    fi
+    
+    # Get latest Debian template
+    local latest_template
+    latest_template=$(pveam available --section system | awk '/debian/ {print $2}' | sort -V | tail -n 1)
+    
+    if [[ -z "$latest_template" ]]; then
+        die "No Debian templates available"
+    fi
+    
+    print_info "Latest template: $latest_template"
+    
+    # Download template
+    print_info "Downloading to $TEMPLATE_STORAGE..."
+    if ! pveam download "$TEMPLATE_STORAGE" "$latest_template"; then
         die "Failed to download template"
     fi
     
-    log SUCCESS "Template downloaded: $template_name"
-    echo "$template_name"
-}
-
-locate_template() {
-    local storage="$1"
-    local template_name="$2"
+    print_success "Template downloaded: $latest_template"
     
-    log STEP "Locating template"
+    # Locate template path
+    TEMPLATE_PATH=$(pvesm path "${TEMPLATE_STORAGE}:vztmpl/${latest_template}" 2>/dev/null || true)
     
-    # Try pvesm path first
-    local template_path
-    template_path=$(pvesm path "${storage}:vztmpl/${template_name}" 2>/dev/null || true)
-    
-    # Fallback to standard location
-    if [[ -z "$template_path" ]]; then
-        template_path=$(find /var/lib/vz/template/cache -maxdepth 1 -name "$template_name" 2>/dev/null | head -n 1)
+    if [[ -z "$TEMPLATE_PATH" ]]; then
+        TEMPLATE_PATH=$(find /var/lib/vz/template/cache -maxdepth 1 -name "$latest_template" 2>/dev/null | head -n 1)
     fi
     
-    if [[ -z "$template_path" ]]; then
-        die "Failed to locate template: $template_name"
+    if [[ -z "$TEMPLATE_PATH" ]]; then
+        die "Failed to locate downloaded template"
     fi
     
-    log SUCCESS "Template located: $template_path"
-    echo "$template_path"
+    print_success "Template path: $TEMPLATE_PATH"
 }
 
-###################################################################################
-# CONTAINER CREATION
-###################################################################################
+#################################################################
+# Container Creation                                            #
+#################################################################
 
-create_lxc_container() {
-    local ct_id="$1" hostname="$2" template_path="$3" rootfs_storage="$4"
-    local memory="$5" cores="$6" bridge="$7" password="$8"
+create_container() {
+    print_header "Creating LXC Container"
     
-    log STEP "Creating LXC container"
+    print_info "Creating container $CONTAINER_ID ($HOSTNAME)..."
     
-    print_subheader "Creating container $ct_id..."
+    # Build pct create command
+    local pct_args=(
+        "$CONTAINER_ID"
+        "$TEMPLATE_PATH"
+        --arch amd64
+        --ostype debian
+        --hostname "$HOSTNAME"
+        --unprivileged 1
+        --features nesting=1
+        --password "$PASSWORD"
+        --ignore-unpack-errors
+        --storage "$ROOTFS_STORAGE"
+        --rootfs "$ROOTFS_STORAGE:$DEFAULT_DISK"
+        --cores "$DEFAULT_CORES"
+        --memory "$DEFAULT_MEMORY"
+        --swap "$DEFAULT_SWAP"
+        --net0 "name=eth0,bridge=$BRIDGE,firewall=1,ip=dhcp"
+        --start 1
+    )
     
-    if ! pct create "$ct_id" "$template_path" \
-        --arch amd64 \
-        --ostype debian \
-        --hostname "$hostname" \
-        --unprivileged 1 \
-        --features nesting=1 \
-        --password "$password" \
-        --ignore-unpack-errors \
-        --ssh-public-keys /root/.ssh/authorized_keys \
-        --storage "$rootfs_storage" \
-        --rootfs "${rootfs_storage}:${DEFAULT_DISK}" \
-        --cores "$cores" \
-        --memory "$memory" \
-        --swap "$DEFAULT_SWAP" \
-        --net0 "name=eth0,bridge=${bridge},firewall=1,ip=dhcp" \
-        --start 1 2>&1 | tee -a "$LOG_FILE"; then
+    # Add SSH keys if available
+    if [[ "$SSH_KEYS_AVAILABLE" == true ]]; then
+        pct_args+=(--ssh-public-keys /root/.ssh/authorized_keys)
+    fi
+    
+    if ! pct create "${pct_args[@]}"; then
         die "Failed to create container"
     fi
     
-    CREATED_CT_ID="$ct_id"
-    log SUCCESS "Container created"
+    print_success "Container created and started"
     
-    # Wait for container to start
+    # Wait for container to initialize
+    print_info "Waiting for container to initialize..."
     sleep 5
 }
 
+#################################################################
+# Container Configuration                                       #
+#################################################################
+
 configure_container() {
-    local ct_id="$1" username="$2" password="$3"
+    print_header "Configuring Container"
     
-    log STEP "Configuring container"
-    
-    print_subheader "Configuring locales..."
-    pct exec "$ct_id" -- bash -c "
-        export DEBIAN_FRONTEND=noninteractive && \
-        export LANG=C.UTF-8 LC_ALL=C.UTF-8 && \
-        apt-get update -y && \
-        apt-get upgrade -y && \
-        apt-get install -y locales && \
-        sed -i 's/^# *en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen && \
-        locale-gen en_US.UTF-8 && \
+    # Configure locales
+    print_info "Configuring locales..."
+    pct exec "$CONTAINER_ID" -- bash -c "
+        export DEBIAN_FRONTEND=noninteractive
+        export LANG=C.UTF-8 LC_ALL=C.UTF-8
+        apt-get update -y
+        apt-get upgrade -y
+        apt-get install -y locales
+        sed -i 's/^# *en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen
+        locale-gen en_US.UTF-8
         update-locale LANG=en_US.UTF-8
-    " 2>&1 | tee -a "$LOG_FILE" || die "Locale configuration failed"
+        echo 'LANG=en_US.UTF-8' >> /etc/environment
+        echo 'LC_ALL=en_US.UTF-8' >> /etc/environment
+    " || die "Failed to configure locales"
+    print_success "Locales configured"
     
-    pct exec "$ct_id" -- bash -c "echo 'LANG=en_US.UTF-8' >> /etc/environment" 2>&1 | tee -a "$LOG_FILE"
-    pct exec "$ct_id" -- bash -c "echo 'LC_ALL=en_US.UTF-8' >> /etc/environment" 2>&1 | tee -a "$LOG_FILE"
-    
-    print_subheader "Creating user: $username..."
-    pct exec "$ct_id" -- bash -c "
-        apt-get install -y sudo cloud-init && \
-        adduser --gecos ',,,,' --disabled-password $username && \
-        usermod -aG sudo $username && \
-        echo '$username:$password' | chpasswd && \
+    # Install packages and create user
+    print_info "Installing packages and creating user..."
+    pct exec "$CONTAINER_ID" -- bash -c "
+        apt-get install -y sudo cloud-init
+        adduser --gecos ',,,,' --disabled-password '$USERNAME'
+        usermod -aG sudo '$USERNAME'
+        echo '$USERNAME:$PASSWORD' | chpasswd
         passwd -l root
-    " 2>&1 | tee -a "$LOG_FILE" || die "User configuration failed"
+    " || die "Failed to configure user"
+    print_success "User '$USERNAME' created with sudo access"
     
-    print_subheader "Configuring cloud-init..."
-    pct exec "$ct_id" -- bash -lc '
+    # Configure Cloud-Init for SSH key regeneration
+    print_info "Configuring Cloud-Init..."
+    pct exec "$CONTAINER_ID" -- bash -lc '
         set -e
         for u in cloud-init-local.service cloud-init-main.service cloud-init-network.service cloud-config.service cloud-final.service cloud-init.target; do
             systemctl list-unit-files "$u" >/dev/null 2>&1 && systemctl enable "$u" >/dev/null 2>&1 || true
         done
-    ' 2>&1 | tee -a "$LOG_FILE"
+    ' || print_warning "Some Cloud-Init services may not be available"
     
-    pct exec "$ct_id" -- bash -c "mkdir -p /var/lib/cloud/seed/nocloud" 2>&1 | tee -a "$LOG_FILE"
-    pct exec "$ct_id" -- bash -c 'cat > /var/lib/cloud/seed/nocloud/user-data <<EOF
+    pct exec "$CONTAINER_ID" -- bash -c "
+        mkdir -p /var/lib/cloud/seed/nocloud
+        cat > /var/lib/cloud/seed/nocloud/user-data <<EOF
 #cloud-config
 ssh_deletekeys: true
-ssh_genkeytypes: [ "rsa", "ecdsa", "ed25519" ]
-EOF' 2>&1 | tee -a "$LOG_FILE"
-    pct exec "$ct_id" -- bash -c "touch /var/lib/cloud/seed/nocloud/meta-data" 2>&1 | tee -a "$LOG_FILE"
+ssh_genkeytypes: [ \"rsa\", \"ecdsa\", \"ed25519\" ]
+EOF
+        touch /var/lib/cloud/seed/nocloud/meta-data
+    " || die "Failed to configure Cloud-Init"
+    print_success "Cloud-Init configured for SSH key regeneration"
     
-    log SUCCESS "Container configured"
+    # Clean up for template
+    print_info "Preparing for template conversion..."
+    pct exec "$CONTAINER_ID" -- bash -c "
+        apt-get clean
+        rm -f /etc/ssh/ssh_host_*
+        rm -f /etc/machine-id
+        touch /etc/machine-id
+        truncate -s 0 /var/log/*log 2>/dev/null || true
+    " || die "Failed to clean up container"
+    print_success "Container prepared for template conversion"
 }
 
-prepare_for_template() {
-    local ct_id="$1"
-    
-    log STEP "Preparing container for template conversion"
-    
-    pct exec "$ct_id" -- bash -c "
-        apt-get clean && \
-        rm -f /etc/ssh/ssh_host_* && \
-        rm -f /etc/machine-id && \
-        touch /etc/machine-id && \
-        truncate -s 0 /var/log/*log
-    " 2>&1 | tee -a "$LOG_FILE" || log WARN "Some cleanup operations failed"
-    
-    # Add description
-    cat <<'EOF' >> /etc/pve/lxc/${ct_id}.conf
-description: <img src="https://github.com/vdarkobar/cloud/blob/main/misc/debian-logo.png?raw=true" alt="Debian"/><br>
-EOF
-    
-    log SUCCESS "Container prepared"
-}
+#################################################################
+# Template Conversion                                           #
+#################################################################
 
 convert_to_template() {
-    local ct_id="$1"
-    local hostname="$2"
+    print_header "Converting to Template"
     
-    log STEP "Converting to template"
+    # Add description
+    cat <<'EOF' >> "/etc/pve/lxc/${CONTAINER_ID}.conf"
+description: <img src="https://github.com/vdarkobar/cloud/blob/main/misc/debian-logo.png?raw=true" alt="Debian Logo"/><br><details><summary>Click to expand</summary>Debian LXC Template - Created by lab/deblxc.sh</details>
+EOF
     
-    print_subheader "Stopping container..."
-    pct stop "$ct_id" 2>&1 | tee -a "$LOG_FILE" || die "Failed to stop container"
+    # Stop and convert
+    print_info "Stopping container..."
+    if ! pct stop "$CONTAINER_ID"; then
+        die "Failed to stop container"
+    fi
     
-    print_subheader "Converting to template..."
-    pct template "$ct_id" 2>&1 | tee -a "$LOG_FILE" || die "Failed to convert to template"
+    print_info "Converting to template..."
+    if ! pct template "$CONTAINER_ID"; then
+        die "Failed to convert to template"
+    fi
     
-    log SUCCESS "Converted to template"
+    print_success "Container $CONTAINER_ID converted to template"
 }
 
-###################################################################################
-# MAIN
-###################################################################################
+#################################################################
+# Main Function                                                  #
+#################################################################
 
 main() {
-    show_header
-    detect_interactive_mode
-    check_privileges
-    check_environment
-    check_dependencies
+    clear
     
-    gather_configuration
-    show_configuration_summary
+    echo -e "${C_CYAN:-\033[0;36m}╔════════════════════════════════════════════════════════════╗${C_RESET:-\033[0m}"
+    echo -e "${C_CYAN:-\033[0;36m}║         Debian LXC Template Creator v${VERSION}            ║${C_RESET:-\033[0m}"
+    echo -e "${C_CYAN:-\033[0;36m}║          https://github.com/vdarkobar/lab                  ║${C_RESET:-\033[0m}"
+    echo -e "${C_CYAN:-\033[0;36m}╚════════════════════════════════════════════════════════════╝${C_RESET:-\033[0m}"
     
-    local template_name
-    template_name=$(download_debian_template "$TEMPLATE_STORAGE")
+    setup_logging
     
-    local template_path
-    template_path=$(locate_template "$TEMPLATE_STORAGE" "$template_name")
+    # Run all steps
+    preflight_checks
+    select_template_storage
+    select_rootfs_storage
+    select_container_id
+    select_hostname
+    select_user_credentials
+    select_network_bridge
+    download_template
+    create_container
+    configure_container
+    convert_to_template
     
-    create_lxc_container "$CT_ID" "$CT_HOSTNAME" "$template_path" "$ROOTFS_STORAGE" \
-        "$CT_MEMORY" "$CT_CORES" "$CT_BRIDGE" "$CT_PASSWORD"
-    
-    configure_container "$CT_ID" "$CT_USERNAME" "$CT_PASSWORD"
-    prepare_for_template "$CT_ID"
-    convert_to_template "$CT_ID" "$CT_HOSTNAME"
-    
+    # Summary
     echo
     draw_separator
-    log SUCCESS "LXC Template Created"
+    print_success "Debian LXC Template created successfully!"
+    echo
+    print_info "Template ID: $CONTAINER_ID"
+    print_info "Hostname: $HOSTNAME"
+    print_info "Username: $USERNAME"
+    print_info "Storage: $ROOTFS_STORAGE"
+    print_info "Bridge: $BRIDGE"
+    echo
+    print_info "Clone with:"
+    echo "  pct clone $CONTAINER_ID <new-id> --hostname <name> --full"
+    echo
+    print_info "SSH keys will be regenerated automatically via Cloud-Init on first boot"
     draw_separator
-    echo
-    print_kv "Container ID" "$CT_ID"
-    print_kv "Hostname" "$CT_HOSTNAME"
-    print_kv "Username" "$CT_USERNAME"
-    print_kv "Template Storage" "$TEMPLATE_STORAGE"
-    print_kv "Rootfs Storage" "$ROOTFS_STORAGE"
-    echo
-    print_info "Clone with: pct clone $CT_ID <new-id> --hostname <hostname>"
-    print_info "SSH keys will regenerate on first boot via cloud-init"
-    print_info "Log file: $LOG_FILE"
-    echo
+    
+    log "Template creation completed successfully: ID=$CONTAINER_ID"
 }
 
+# Run main
 main "$@"

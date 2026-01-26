@@ -231,8 +231,7 @@ prompt_vm_id() {
     local default_id=$(get_next_vm_id)
     echo
     print_info "Next available VM ID: $default_id"
-    echo -n "Enter VM ID [default: $default_id]: "
-    read -r vm_id
+    read -p "Enter VM ID [default: $default_id]: " -r vm_id
     vm_id="${vm_id:-$default_id}"
     [[ ! "$vm_id" =~ ^[0-9]+$ ]] && log ERROR "VM ID must be a number" && return 1
     check_vm_exists "$vm_id" || return 1
@@ -243,8 +242,7 @@ prompt_memory() {
     local max_memory=$(free -m | awk '/^Mem:/{print $2}')
     echo
     print_info "Memory range: ${MIN_MEMORY}MB to ${max_memory}MB"
-    echo -n "Enter memory in MB [default: $DEFAULT_MEMORY]: "
-    read -r memory
+    read -p "Enter memory in MB [default: $DEFAULT_MEMORY]: " -r memory
     memory="${memory:-$DEFAULT_MEMORY}"
     validate_memory "$memory" || return 1
     echo "$memory"
@@ -254,8 +252,7 @@ prompt_cores() {
     local max_cores=$(nproc)
     echo
     print_info "Cores range: 1 to $max_cores"
-    echo -n "Enter cores [default: $DEFAULT_CORES]: "
-    read -r cores
+    read -p "Enter cores [default: $DEFAULT_CORES]: " -r cores
     cores="${cores:-$DEFAULT_CORES}"
     validate_cores "$cores" || return 1
     echo "$cores"
@@ -269,8 +266,7 @@ prompt_bridge() {
     echo
     print_info "Available bridges:"
     printf '%s\n' "${bridges[@]}" | nl -s ') '
-    echo -n "Enter bridge [default: $DEFAULT_BRIDGE]: "
-    read -r bridge_input
+    read -p "Enter bridge [default: $DEFAULT_BRIDGE]: " -r bridge_input
     local bridge="${bridge_input:-$DEFAULT_BRIDGE}"
     
     [[ "$bridge_input" =~ ^[0-9]+$ ]] && bridge="${bridges[$((bridge_input-1))]}"
@@ -287,8 +283,7 @@ prompt_storage() {
     print_info "Available storages:"
     printf '%s\n' "${storages[@]}" | nl -s ') '
     local default_storage="${storages[0]}"
-    echo -n "Select storage [default: $default_storage]: "
-    read -r storage_input
+    read -p "Select storage [default: $default_storage]: " -r storage_input
     local storage="${storage_input:-$default_storage}"
     
     [[ "$storage_input" =~ ^[0-9]+$ ]] && storage="${storages[$((storage_input-1))]}"
@@ -299,8 +294,7 @@ prompt_storage() {
 prompt_hostname() {
     while true; do
         echo
-        echo -n "Enter hostname [default: $DEFAULT_HOSTNAME]: "
-        read -r hostname
+        read -p "Enter hostname [default: $DEFAULT_HOSTNAME]: " -r hostname
         hostname="${hostname:-$DEFAULT_HOSTNAME}"
         validate_hostname "$hostname" && echo "$hostname" && return 0
     done
@@ -309,8 +303,7 @@ prompt_hostname() {
 prompt_username() {
     while true; do
         echo
-        echo -n "Enter username: "
-        read -r username
+        read -p "Enter username: " -r username
         [[ -z "$username" ]] && log ERROR "Username cannot be empty" && continue
         validate_username "$username" && echo "$username" && return 0
     done
@@ -319,12 +312,10 @@ prompt_username() {
 prompt_password() {
     while true; do
         echo
-        echo -n "Enter password: "
-        read -rs password
+        read -p "Enter password: " -rs password
         echo
         [[ -z "$password" ]] && log ERROR "Password cannot be empty" && continue
-        echo -n "Confirm password: "
-        read -rs password_confirm
+        read -p "Confirm password: " -rs password_confirm
         echo
         [[ "$password" = "$password_confirm" ]] && echo "$password" && return 0
         log ERROR "Passwords do not match"
@@ -334,8 +325,7 @@ prompt_password() {
 prompt_image_url() {
     echo
     print_info "Default: $DEFAULT_IMAGE_URL"
-    echo -n "Enter custom URL or press Enter: "
-    read -r image_url
+    read -p "Enter custom URL or press Enter: " -r image_url
     echo "${image_url:-$DEFAULT_IMAGE_URL}"
 }
 
@@ -393,8 +383,7 @@ show_configuration_summary() {
     echo
     
     if [[ "$IS_INTERACTIVE" = true ]]; then
-        echo -n "Proceed? [Y/n]: "
-        read -r confirm
+        read -p "Proceed? [Y/n]: " -r confirm
         [[ "$confirm" =~ ^[Nn] ]] && log INFO "Cancelled" && exit 0
     fi
 }

@@ -203,10 +203,12 @@ validate_storage_space() {
     local storage="$1"
     log STEP "Validating storage space"
     
-    # Try to get storage status from pvesm
-    local available_gb=$(pvesm status -storage "$storage" 2>/dev/null | awk 'NR==2 {print int($4/1024/1024/1024)}')
+    # Try to get storage status from pvesm (column 4 is 'avail' in bytes)
+    local available_bytes=$(pvesm status -storage "$storage" 2>/dev/null | awk 'NR==2 {print $4}')
     
-    if [[ -n "$available_gb" ]] && [[ "$available_gb" =~ ^[0-9]+$ ]]; then
+    if [[ -n "$available_bytes" ]] && [[ "$available_bytes" =~ ^[0-9]+$ ]]; then
+        local available_gb=$((available_bytes / 1024 / 1024 / 1024))
+        
         if [[ "$available_gb" -lt "$MIN_DISK_SPACE_GB" ]]; then
             log ERROR "Insufficient space on $storage: ${available_gb}GB available, ${MIN_DISK_SPACE_GB}GB required"
             return 1

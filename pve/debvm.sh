@@ -229,8 +229,8 @@ get_available_storages() { pvesm status -content images 2>/dev/null | awk 'NR>1 
 
 prompt_vm_id() {
     local default_id=$(get_next_vm_id)
-    echo
-    print_info "Next available VM ID: $default_id"
+    echo >&2
+    print_info "Next available VM ID: $default_id" >&2
     read -p "Enter VM ID [default: $default_id]: " -r vm_id
     vm_id="${vm_id:-$default_id}"
     [[ ! "$vm_id" =~ ^[0-9]+$ ]] && log ERROR "VM ID must be a number" && return 1
@@ -240,8 +240,8 @@ prompt_vm_id() {
 
 prompt_memory() {
     local max_memory=$(free -m | awk '/^Mem:/{print $2}')
-    echo
-    print_info "Memory range: ${MIN_MEMORY}MB to ${max_memory}MB"
+    echo >&2
+    print_info "Memory range: ${MIN_MEMORY}MB to ${max_memory}MB" >&2
     read -p "Enter memory in MB [default: $DEFAULT_MEMORY]: " -r memory
     memory="${memory:-$DEFAULT_MEMORY}"
     validate_memory "$memory" || return 1
@@ -250,8 +250,8 @@ prompt_memory() {
 
 prompt_cores() {
     local max_cores=$(nproc)
-    echo
-    print_info "Cores range: 1 to $max_cores"
+    echo >&2
+    print_info "Cores range: 1 to $max_cores" >&2
     read -p "Enter cores [default: $DEFAULT_CORES]: " -r cores
     cores="${cores:-$DEFAULT_CORES}"
     validate_cores "$cores" || return 1
@@ -263,9 +263,9 @@ prompt_bridge() {
     mapfile -t bridges < <(get_network_bridges)
     [[ ${#bridges[@]} -eq 0 ]] && log ERROR "No bridges found" && return 1
     
-    echo
-    print_info "Available bridges:"
-    printf '%s\n' "${bridges[@]}" | nl -s ') '
+    echo >&2
+    print_info "Available bridges:" >&2
+    printf '%s\n' "${bridges[@]}" | nl -s ') ' >&2
     read -p "Enter bridge [default: $DEFAULT_BRIDGE]: " -r bridge_input
     local bridge="${bridge_input:-$DEFAULT_BRIDGE}"
     
@@ -279,9 +279,9 @@ prompt_storage() {
     mapfile -t storages < <(get_available_storages)
     [[ ${#storages[@]} -eq 0 ]] && log ERROR "No storage found" && return 1
     
-    echo
-    print_info "Available storages:"
-    printf '%s\n' "${storages[@]}" | nl -s ') '
+    echo >&2
+    print_info "Available storages:" >&2
+    printf '%s\n' "${storages[@]}" | nl -s ') ' >&2
     local default_storage="${storages[0]}"
     read -p "Select storage [default: $default_storage]: " -r storage_input
     local storage="${storage_input:-$default_storage}"
@@ -293,7 +293,7 @@ prompt_storage() {
 
 prompt_hostname() {
     while true; do
-        echo
+        echo >&2
         read -p "Enter hostname [default: $DEFAULT_HOSTNAME]: " -r hostname
         hostname="${hostname:-$DEFAULT_HOSTNAME}"
         validate_hostname "$hostname" && echo "$hostname" && return 0
@@ -302,7 +302,7 @@ prompt_hostname() {
 
 prompt_username() {
     while true; do
-        echo
+        echo >&2
         read -p "Enter username: " -r username
         [[ -z "$username" ]] && log ERROR "Username cannot be empty" && continue
         validate_username "$username" && echo "$username" && return 0
@@ -311,23 +311,23 @@ prompt_username() {
 
 prompt_password() {
     while true; do
-        echo
+        echo >&2
         read -p "Enter password: " -rs password
-        echo
+        echo >&2
         [[ -z "$password" ]] && log ERROR "Password cannot be empty" && continue
         read -p "Confirm password: " -rs password_confirm
-        echo
+        echo >&2
         [[ "$password" = "$password_confirm" ]] && echo "$password" && return 0
         log ERROR "Passwords do not match"
     done
 }
 
 prompt_image_url() {
-    echo
-    print_info "Cloud Image URL"
-    print_subheader "Default: Debian 13 Generic Cloud Image"
-    print_subheader "${C_DIM}${DEFAULT_IMAGE_URL}${C_RESET}"
-    echo
+    echo >&2
+    print_info "Cloud Image URL" >&2
+    print_subheader "Default: Debian 13 Generic Cloud Image" >&2
+    print_subheader "${C_DIM}${DEFAULT_IMAGE_URL}${C_RESET}" >&2
+    echo >&2
     read -p "Enter custom image URL (or press Enter for default): " -r image_url
     echo "${image_url:-$DEFAULT_IMAGE_URL}"
 }

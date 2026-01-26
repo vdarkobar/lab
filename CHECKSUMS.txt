@@ -10,7 +10,7 @@
 685d01f33ba356bf3d51e53df30bdca7706b7eb835a1bd17449e19b5fa423634  lib/formatting.sh
 
 # Server Scripts
-c9014bede1e28974259bbf828a8aff277c187a069a957f73bd79835233f12206  server/hardening.sh
+e56db8a5a909a1d6372fc826bf2d49f948e9289df2e5471428e733f309310880  server/hardening.sh
 01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b  server/jump.sh
 
 # PVE Scripts
@@ -20,4 +20,5 @@ c9014bede1e28974259bbf828a8aff277c187a069a957f73bd79835233f12206  server/hardeni
 # Application Scripts
 6bc27b2a0e876b27ef59889b520b52b55ba035c189189cb58a2e45516faf9f65  apps/docker.sh
 48d7219ff8afd9d4f853f49ad4be84696646c827708f384118c9c82d86bc0f4d  apps/npm.sh
+b0fdfae36638fea515ad257bda909ca0dc3297e6ada40910dea46c861536bd24  apps/unbound.sh
 

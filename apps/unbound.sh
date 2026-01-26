@@ -698,6 +698,539 @@ show_summary() {
 }
 
 #################################################################
+# VLAN Configuration Helper                                     #
+#################################################################
+
+configure_vlans() {
+    print_header "VLAN Access Control Configuration"
+    
+    echo
+    print_info "This configures which network subnets can query this DNS server."
+    print_info "By default, only localhost can query Unbound."
+    print_info "Add your VLANs/subnets here to allow DNS queries from them."
+    echo
+    draw_separator
+    echo
+    print_info "Paste your VLAN subnets below (one per line, CIDR format)."
+    print_info "When finished, press Ctrl+D (or Ctrl+Z then Enter on Windows)."
+    echo
+    print_info "Format: CIDR notation"
+    print_info "Examples:"
+    echo "  192.168.1.0/24      # Main LAN"
+    echo "  192.168.20.0/24     # IoT VLAN"
+    echo "  10.10.0.0/24        # Management VLAN"
+    echo
+    draw_separator
+    echo
+    
+    local vlans_raw
+    vlans_raw="$(cat)" || true
+    
+    # Drop empty lines
+    vlans_raw="$(printf '%s\n' "$vlans_raw" | sed -E '/^[[:space:]]*$/d')"
+    
+    if [[ -z "$vlans_raw" ]]; then
+        echo
+        print_warning "No VLANs provided. Skipping VLAN configuration."
+        return 0
+    fi
+    
+    # Normalize whitespace, strip comments, keep first token, sort/unique
+    local vlans
+    vlans="$(
+        printf '%s\n' "$vlans_raw" |
+        sed -E 's/#.*$//' |
+        sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' |
+        awk '{print $1}' |
+        sed -E '/^[[:space:]]*$/d' |
+        sort -u
+    )"
+    
+    if [[ -z "$vlans" ]]; then
+        echo
+        print_warning "No valid VLANs after processing. Skipping."
+        return 0
+    fi
+    
+    local outfile="/etc/unbound/unbound.conf.d/vlans.conf"
+    declare -A used_subnets
+    local tmp_file
+    tmp_file=$(mktemp)
+    
+    local warnings=0
+    local loaded=0
+    local skipped=0
+    local reverse24=0
+    local reverse_other=0
+    
+    {
+        echo "# Auto-generated VLAN access-control + reverse zones for Unbound"
+        echo "# Generated: $(date -Is)"
+        echo
+        echo "server:"
+        echo
+        echo "    # ------------------------------------------------------------------------"
+        echo "    # VLAN networks - allowed to query this DNS server"
+        echo "    # ------------------------------------------------------------------------"
+        echo
+        
+        while IFS= read -r line; do
+            line="$(printf '%s' "$line" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
+            [[ -z "$line" ]] && continue
+            
+            line="$(printf '%s' "$line" | sed -E 's/#.*$//')"
+            line="$(printf '%s' "$line" | awk '{print $1}')"
+            [[ -z "$line" ]] && continue
+            
+            if [[ ! "$line" =~ ^([^/]+)/([0-9]{1,2})$ ]]; then
+                print_warning "Skipping invalid CIDR format: $line"
+                ((++warnings)); ((++skipped))
+                continue
+            fi
+            
+            local ip="${BASH_REMATCH[1]}"
+            local prefix="${BASH_REMATCH[2]}"
+            
+            # Validate IPv4
+            if [[ ! "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+                print_warning "Skipping invalid IPv4: $line"
+                ((++warnings)); ((++skipped))
+                continue
+            fi
+            
+            local a b c d
+            IFS=. read -r a b c d <<< "$ip"
+            if (( a > 255 || b > 255 || c > 255 || d > 255 )); then
+                print_warning "Skipping invalid IP range: $line"
+                ((++warnings)); ((++skipped))
+                continue
+            fi
+            
+            # Validate prefix
+            if (( prefix < 0 || prefix > 32 )); then
+                print_warning "Skipping invalid CIDR prefix: $line"
+                ((++warnings)); ((++skipped))
+                continue
+            fi
+            
+            if [[ -n "${used_subnets[$line]+x}" ]]; then
+                print_warning "Duplicate subnet ignored: $line"
+                ((++skipped))
+                continue
+            fi
+            used_subnets[$line]=1
+            
+            echo "    access-control: ${line} allow"
+            ((++loaded))
+        done <<< "$vlans"
+        
+        echo
+        echo "    # ------------------------------------------------------------------------"
+        echo "    # Reverse zones for /24 networks"
+        echo "    # ------------------------------------------------------------------------"
+        echo
+        
+        for cidr in $(printf '%s\n' "${!used_subnets[@]}" | sort -V); do
+            [[ -z "$cidr" ]] && continue
+            local ip="${cidr%/*}"
+            local prefix="${cidr#*/}"
+            
+            if [[ "$prefix" == "24" ]]; then
+                local o1 o2 o3 o4
+                IFS=. read -r o1 o2 o3 o4 <<< "$ip"
+                echo "    local-zone: \"${o3}.${o2}.${o1}.in-addr.arpa.\" static"
+                ((++reverse24))
+            else
+                ((++reverse_other))
+            fi
+        done
+        
+        if (( reverse_other > 0 )); then
+            echo
+            echo "    # Note: ${reverse_other} subnet(s) were not /24, no reverse zone generated."
+        fi
+        
+    } > "$tmp_file"
+    
+    if (( loaded == 0 )); then
+        print_error "No valid VLAN subnets after validation."
+        rm -f "$tmp_file"
+        return 1
+    fi
+    
+    echo
+    print_info "Generated configuration preview:"
+    draw_separator
+    cat "$tmp_file"
+    draw_separator
+    echo
+    
+    echo -ne "Write this configuration to $outfile? (yes/no): "
+    read -r confirm
+    
+    if [[ "${confirm,,}" != "y" && "${confirm,,}" != "yes" ]]; then
+        print_warning "Aborted. Nothing written."
+        rm -f "$tmp_file"
+        return 0
+    fi
+    
+    if [[ -f "$outfile" ]]; then
+        echo
+        print_warning "File already exists: $outfile"
+        echo -ne "Overwrite it? (yes/no): "
+        read -r overwrite
+        
+        if [[ "${overwrite,,}" != "y" && "${overwrite,,}" != "yes" ]]; then
+            print_warning "Aborted. Existing file preserved."
+            rm -f "$tmp_file"
+            return 0
+        fi
+    fi
+    
+    sudo install -m 0644 -o root -g root "$tmp_file" "$outfile"
+    rm -f "$tmp_file"
+    
+    if ! sudo unbound-checkconf >/dev/null 2>&1; then
+        print_error "Unbound configuration has errors!"
+        print_warning "File written but Unbound NOT reloaded. Fix errors and reload manually."
+        return 1
+    fi
+    
+    sudo systemctl reload unbound
+    
+    echo
+    print_success "VLAN configuration installed: $outfile"
+    print_info "Loaded VLANs: $loaded"
+    print_info "Reverse zones (/24): $reverse24"
+    if (( skipped > 0 )); then
+        print_warning "Skipped entries: $skipped"
+    fi
+    
+    log "VLAN configuration completed: $loaded subnets"
+}
+
+#################################################################
+# Static Hosts Configuration Helper                             #
+#################################################################
+
+configure_static_hosts() {
+    print_header "Static DNS Hosts Configuration"
+    
+    echo
+    print_info "This creates local DNS records (A and PTR) for your infrastructure."
+    print_info "Use this for devices that need stable, predictable DNS names:"
+    echo "  - Servers, NAS, file shares"
+    echo "  - Printers, scanners"
+    echo "  - Network equipment, management interfaces"
+    echo "  - Any device that runs services or appears in logs"
+    echo
+    print_warning "Do NOT add regular clients here - use DHCP for phones, laptops, etc."
+    echo
+    draw_separator
+    echo
+    
+    # Get domain name
+    local domain=""
+    while true; do
+        echo -ne "Enter your local domain name (e.g., home.local, lan.example.com): "
+        read -r domain
+        echo
+        
+        # Convert to lowercase and trim
+        domain="${domain,,}"
+        domain="$(echo "$domain" | xargs)"
+        
+        if [[ -z "$domain" ]]; then
+            print_error "Domain cannot be empty."
+            continue
+        fi
+        
+        if [[ ! "$domain" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$ ]]; then
+            print_error "Invalid domain format. Use: letters, numbers, hyphens, dots"
+            continue
+        fi
+        
+        break
+    done
+    
+    print_success "Domain set to: $domain"
+    echo
+    draw_separator
+    echo
+    print_info "Now paste your host entries below (one per line)."
+    print_info "When finished, press Ctrl+D (or Ctrl+Z then Enter on Windows)."
+    echo
+    print_info "Format: IP_ADDRESS    HOSTNAME"
+    print_info "Examples:"
+    echo "  192.168.1.10    nas"
+    echo "  192.168.1.20    proxmox"
+    echo "  192.168.1.30    printer"
+    echo "  192.168.20.5    unifi-controller"
+    echo
+    draw_separator
+    echo
+    
+    local hosts_raw
+    hosts_raw="$(cat)" || true
+    
+    # Drop empty lines
+    hosts_raw="$(printf '%s\n' "$hosts_raw" | sed -E '/^[[:space:]]*$/d')"
+    
+    if [[ -z "$hosts_raw" ]]; then
+        echo
+        print_warning "No hosts provided. Skipping static hosts configuration."
+        return 0
+    fi
+    
+    # Normalize and sort by IP
+    local hosts
+    hosts="$(
+        printf '%s\n' "$hosts_raw" |
+        awk '
+            {
+                ip=$1;
+                $1="";
+                sub(/^[ \t]+/,"");
+                name=$0;
+                split(ip,a,".");
+                if (length(a[1]) && length(a[2]) && length(a[3]) && length(a[4])) {
+                    key=sprintf("%03d.%03d.%03d.%03d",a[1],a[2],a[3],a[4]);
+                } else {
+                    key="999.999.999.999";
+                }
+                print key "\t" ip "\t" name;
+            }
+        ' |
+        sort |
+        cut -f2-
+    )"
+    
+    echo
+    print_success "Hosts received (sorted by IP)."
+    
+    # Sanitize label function
+    sanitize_label() {
+        local s="$1"
+        s="$(printf '%s' "$s" | tr '[:upper:]' '[:lower:]')"
+        s="${s//_/-}"
+        s="${s// /-}"
+        s="$(printf '%s' "$s" | sed -E 's/[^a-z0-9-]+/-/g; s/^-+//; s/-+$//; s/-+/-/g')"
+        [[ -z "$s" ]] && s="host"
+        [[ "$s" =~ ^[0-9] ]] && s="h-$s"
+        printf '%s' "$s"
+    }
+    
+    local outfile="/etc/unbound/unbound.conf.d/30-static-hosts.conf"
+    declare -A used_labels
+    declare -A used_ips
+    declare -A used_fqdns
+    
+    local tmp_file
+    tmp_file=$(mktemp)
+    
+    local warnings=0
+    local loaded=0
+    local skipped=0
+    local current_subnet=""
+    
+    {
+        echo "# Auto-generated static hosts for Unbound"
+        echo "# Domain: ${domain}"
+        echo "# Generated: $(date -Is)"
+        echo
+        echo "server:"
+        echo
+        
+        while IFS= read -r line; do
+            line="$(printf '%s' "$line" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
+            [[ -z "$line" ]] && continue
+            [[ "$line" =~ ^# ]] && continue
+            
+            local ip name
+            ip="$(printf '%s' "$line" | awk '{print $1}')"
+            name="$(printf '%s' "$line" | sed -E 's/^[^[:space:]]+[[:space:]]+//')"
+            [[ -z "$ip" || -z "$name" ]] && { ((++skipped)); continue; }
+            
+            # Validate IPv4
+            if [[ ! "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+                print_warning "Skipping invalid IP format: $line"
+                ((++warnings)); ((++skipped))
+                continue
+            fi
+            
+            local o1 o2 o3 o4
+            IFS=. read -r o1 o2 o3 o4 <<< "$ip"
+            if (( o1 > 255 || o2 > 255 || o3 > 255 || o4 > 255 )); then
+                print_warning "Skipping invalid IP range: $line"
+                ((++warnings)); ((++skipped))
+                continue
+            fi
+            
+            local subnet="${o1}.${o2}.${o3}.0/24"
+            if [[ "$subnet" != "$current_subnet" ]]; then
+                current_subnet="$subnet"
+                echo "    # ========================================================================="
+                echo "    # Subnet: ${current_subnet}"
+                echo "    # ========================================================================="
+                echo
+            fi
+            
+            local base label oct fqdn
+            base="$(sanitize_label "$name")"
+            oct="${ip##*.}"
+            
+            if [[ -n "${used_labels[$base]+x}" && "${used_labels[$base]}" != "$ip" ]]; then
+                label="${base}-${oct}"
+            else
+                label="$base"
+            fi
+            
+            if [[ -n "${used_labels[$label]+x}" && "${used_labels[$label]}" != "$ip" ]]; then
+                local last2
+                last2="$(printf '%s' "$ip" | awk -F. '{print $(NF-1)"-"$NF}')"
+                label="${base}-${last2}"
+            fi
+            
+            fqdn="${label}.${domain}"
+            
+            # Reject duplicate IPs
+            if [[ -n "${used_ips[$ip]+x}" ]]; then
+                print_warning "Duplicate IP rejected: ${ip} (used by ${used_ips[$ip]})"
+                ((++warnings)); ((++skipped))
+                continue
+            fi
+            
+            # Reject duplicate FQDNs
+            if [[ -n "${used_fqdns[$fqdn]+x}" ]]; then
+                print_warning "Duplicate hostname rejected: ${fqdn} (used by ${used_fqdns[$fqdn]})"
+                ((++warnings)); ((++skipped))
+                continue
+            fi
+            
+            used_labels[$label]="$ip"
+            used_ips[$ip]="$fqdn"
+            used_fqdns[$fqdn]="$ip"
+            
+            echo "    local-data: \"${fqdn}. IN A ${ip}\""
+            echo "    local-data-ptr: \"${ip} ${fqdn}\""
+            echo
+            
+            ((++loaded))
+        done <<< "$hosts"
+    } > "$tmp_file"
+    
+    if (( loaded == 0 )); then
+        print_error "No valid hosts after validation."
+        rm -f "$tmp_file"
+        return 1
+    fi
+    
+    echo
+    print_info "Generated configuration preview:"
+    draw_separator
+    cat "$tmp_file"
+    draw_separator
+    echo
+    
+    echo -ne "Write this configuration to $outfile? (yes/no): "
+    read -r confirm
+    
+    if [[ "${confirm,,}" != "y" && "${confirm,,}" != "yes" ]]; then
+        print_warning "Aborted. Nothing written."
+        rm -f "$tmp_file"
+        return 0
+    fi
+    
+    if [[ -f "$outfile" ]]; then
+        echo
+        print_warning "File already exists: $outfile"
+        echo -ne "Overwrite it? (yes/no): "
+        read -r overwrite
+        
+        if [[ "${overwrite,,}" != "y" && "${overwrite,,}" != "yes" ]]; then
+            print_warning "Aborted. Existing file preserved."
+            rm -f "$tmp_file"
+            return 0
+        fi
+    fi
+    
+    sudo install -m 0644 -o root -g root "$tmp_file" "$outfile"
+    rm -f "$tmp_file"
+    
+    if ! sudo unbound-checkconf >/dev/null 2>&1; then
+        print_error "Unbound configuration has errors!"
+        print_warning "File written but Unbound NOT reloaded. Fix errors and reload manually."
+        return 1
+    fi
+    
+    sudo systemctl reload unbound
+    
+    echo
+    print_success "Static hosts configuration installed: $outfile"
+    print_info "Loaded hosts: $loaded"
+    if (( skipped > 0 )); then
+        print_warning "Skipped entries: $skipped"
+    fi
+    
+    log "Static hosts configuration completed: $loaded records"
+}
+
+#################################################################
+# Post-Installation Configuration Menu                          #
+#################################################################
+
+post_install_config() {
+    print_header "Additional Configuration"
+    
+    echo
+    print_info "Unbound is now installed and running with default settings."
+    print_info "You can optionally configure the following now or later:"
+    echo
+    echo "  1) Configure VLANs - Allow other network subnets to use this DNS server"
+    echo "  2) Configure Static Hosts - Add local DNS records for your infrastructure"
+    echo "  3) Skip - Configure these later manually"
+    echo
+    
+    while true; do
+        echo -ne "Select option [1-3]: "
+        read -r choice
+        
+        case "$choice" in
+            1)
+                configure_vlans
+                echo
+                echo -ne "Would you also like to configure static hosts? (yes/no): "
+                read -r also_hosts
+                if [[ "${also_hosts,,}" == "y" || "${also_hosts,,}" == "yes" ]]; then
+                    configure_static_hosts
+                fi
+                break
+                ;;
+            2)
+                configure_static_hosts
+                echo
+                echo -ne "Would you also like to configure VLANs? (yes/no): "
+                read -r also_vlans
+                if [[ "${also_vlans,,}" == "y" || "${also_vlans,,}" == "yes" ]]; then
+                    configure_vlans
+                fi
+                break
+                ;;
+            3)
+                print_info "Skipping additional configuration."
+                print_info "You can configure these later by editing:"
+                echo "  VLANs: /etc/unbound/unbound.conf.d/vlans.conf"
+                echo "  Hosts: /etc/unbound/unbound.conf.d/30-static-hosts.conf"
+                break
+                ;;
+            *)
+                print_error "Invalid choice. Please select 1, 2, or 3."
+                ;;
+        esac
+    done
+}
+
+#################################################################
 # Prompt for Reboot                                             #
 #################################################################
 
@@ -740,7 +1273,7 @@ main() {
     clear
     
     echo -e "${C_CYAN:-\033[0;36m}╔════════════════════════════════════════════════════════════╗${C_RESET:-\033[0m}"
-    echo -e "${C_CYAN:-\033[0;36m}║          Unbound DNS Resolver Installer v${VERSION}          ║${C_RESET:-\033[0m}"
+    echo -e "${C_CYAN:-\033[0;36m}║          Unbound DNS Resolver Installer v${VERSION}        ║${C_RESET:-\033[0m}"
     echo -e "${C_CYAN:-\033[0;36m}║          https://github.com/vdarkobar/lab                  ║${C_RESET:-\033[0m}"
     echo -e "${C_CYAN:-\033[0;36m}╚════════════════════════════════════════════════════════════╝${C_RESET:-\033[0m}"
     
@@ -759,6 +1292,9 @@ main() {
     show_summary
     
     log "Unbound installation completed successfully"
+    
+    # Offer additional configuration
+    post_install_config
     
     prompt_reboot
 }

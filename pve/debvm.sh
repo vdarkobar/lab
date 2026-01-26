@@ -53,7 +53,7 @@ readonly DEFAULT_MEMORY=4096
 readonly DEFAULT_CORES=4
 readonly DEFAULT_BRIDGE="vmbr0"
 readonly MIN_MEMORY=512
-readonly MIN_DISK_SPACE_GB=2
+readonly MIN_DISK_SPACE_GB=8
 
 # Proxmox directories
 readonly TEMPLATE_DIR="/var/lib/vz/template/iso"

@@ -3,12 +3,12 @@
   
 #### *Install <a href="https://github.com/vdarkobar/cloud/blob/main/all/debvm/setup.md"> * </a>*:
 ```bash
-# Quick Install (convenient, medium security):
+# Quick Install (convenient):
 bash -c "$(wget -qLO - https://raw.githubusercontent.com/vdarkobar/lab/main/bootstrap.sh)"
 ```
 
 ```bash
-# Secure Install (verified, high security - RECOMMENDED):
+# Secure Install (verified, medium security - RECOMMENDED):
 wget https://raw.githubusercontent.com/vdarkobar/lab/main/bootstrap.sh
 wget https://raw.githubusercontent.com/vdarkobar/lab/main/bootstrap.sh.sha256
 sha256sum -c bootstrap.sh.sha256

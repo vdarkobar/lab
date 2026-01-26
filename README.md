@@ -8,7 +8,7 @@ bash -c "$(wget -qLO - https://raw.githubusercontent.com/vdarkobar/lab/main/boot
 ```
 
 ```bash
-# Secure Install (verified, medium security - RECOMMENDED):
+# Verified Install (medium security - RECOMMENDED):
 wget https://raw.githubusercontent.com/vdarkobar/lab/main/bootstrap.sh
 wget https://raw.githubusercontent.com/vdarkobar/lab/main/bootstrap.sh.sha256
 sha256sum -c bootstrap.sh.sha256

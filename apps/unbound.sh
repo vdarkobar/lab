@@ -120,22 +120,19 @@ die() {
 preflight_checks() {
     print_header "Preflight Checks"
     
-    # Check if running as root (should not be)
-    if [[ $EUID -eq 0 ]]; then
-        die "Do not run this script as root. Use a regular user with sudo privileges."
+    # Check for sudo/root access
+    if [[ $EUID -ne 0 ]]; then
+        if ! command -v sudo &>/dev/null; then
+            die "sudo is required but not installed"
+        fi
+        if ! sudo -v &>/dev/null; then
+            die "User does not have sudo privileges"
+        fi
+        print_success "Running as non-root user: $(whoami)"
+        print_success "sudo access verified"
+    else
+        print_success "Running as root"
     fi
-    print_success "Running as non-root user: $(whoami)"
-    
-    # Check for sudo
-    if ! command -v sudo &>/dev/null; then
-        die "sudo is required but not installed"
-    fi
-    
-    # Test sudo access
-    if ! sudo -v &>/dev/null; then
-        die "User does not have sudo privileges"
-    fi
-    print_success "sudo access verified"
     
     # Check for required commands
     local required_cmds=("apt" "systemctl" "wget")
@@ -743,7 +740,7 @@ main() {
     clear
     
     echo -e "${C_CYAN:-\033[0;36m}╔════════════════════════════════════════════════════════════╗${C_RESET:-\033[0m}"
-    echo -e "${C_CYAN:-\033[0;36m}║          Unbound DNS Resolver Installer v${VERSION}        ║${C_RESET:-\033[0m}"
+    echo -e "${C_CYAN:-\033[0;36m}║          Unbound DNS Resolver Installer v${VERSION}          ║${C_RESET:-\033[0m}"
     echo -e "${C_CYAN:-\033[0;36m}║          https://github.com/vdarkobar/lab                  ║${C_RESET:-\033[0m}"
     echo -e "${C_CYAN:-\033[0;36m}╚════════════════════════════════════════════════════════════╝${C_RESET:-\033[0m}"
     

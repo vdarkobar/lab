@@ -1,5 +1,5 @@
 # Lab Components Checksums
-# Generated: $(date +%Y-%m-%d)
+# Generated: 2026-01-24
 # Algorithm: SHA256
 #
 # Format: checksum  filepath
@@ -10,13 +10,16 @@
 685d01f33ba356bf3d51e53df30bdca7706b7eb835a1bd17449e19b5fa423634  lib/formatting.sh
 
 # Server Scripts
-c9014bede1e28974259bbf828a8aff277c187a069a957f73bd79835233f12206  server/hardening.sh
-01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b  server/jump.sh
+a4514dae3d43182d52a70ed8743219dd287b566a7a528abd6998ac0c5a0e2c60  server/hardening.sh
+# Coming soon:
+# <checksum>  server/jump.sh
 
 # PVE Scripts
+1b6c2f8a343f3f1b73f8035fedd1a9bfa66ed22c1abeec656adbc7175b96293a  pve/debvm.sh
 be8351b3101456ffeec315e652caaf080daf1618d670ec383320dc033357deb4  pve/deblxc.sh
-5090bd4c44b84ae0268fc4e2490dfa0983e0ecda0ba702243bc1b4155b98c86a  pve/debvm.sh
 
 # Application Scripts
-6bc27b2a0e876b27ef59889b520b52b55ba035c189189cb58a2e45516faf9f65  apps/docker.sh
 48d7219ff8afd9d4f853f49ad4be84696646c827708f384118c9c82d86bc0f4d  apps/npm.sh
+# Coming soon:
+# <checksum>  apps/docker.sh
+# <checksum>  apps/portainer.sh

@@ -203,14 +203,20 @@ validate_storage_space() {
     local storage="$1"
     log STEP "Validating storage space"
     
-    local storage_path=$(pvesm path "${storage}:1" 2>/dev/null | sed 's|/1$||' || echo "")
-    [[ -z "$storage_path" ]] && log WARN "Could not determine storage path" && return 0
+    # Try to get storage status from pvesm
+    local available_gb=$(pvesm status -storage "$storage" 2>/dev/null | awk 'NR==2 {print int($4/1024/1024/1024)}')
     
-    local available_gb=$(df -BG "$storage_path" | awk 'NR==2 {print $4}' | sed 's/G//')
-    [[ "$available_gb" -lt "$MIN_DISK_SPACE_GB" ]] && log ERROR "Insufficient space: ${available_gb}GB" && return 1
-    
-    log SUCCESS "Storage space: ${available_gb}GB available"
-    return 0
+    if [[ -n "$available_gb" ]] && [[ "$available_gb" =~ ^[0-9]+$ ]]; then
+        if [[ "$available_gb" -lt "$MIN_DISK_SPACE_GB" ]]; then
+            log ERROR "Insufficient space on $storage: ${available_gb}GB available, ${MIN_DISK_SPACE_GB}GB required"
+            return 1
+        fi
+        log SUCCESS "Storage space: ${available_gb}GB available"
+        return 0
+    else
+        log WARN "Could not determine storage space for $storage (will proceed anyway)"
+        return 0
+    fi
 }
 
 check_vm_exists() {
@@ -514,10 +520,23 @@ create_proxmox_vm() {
     CREATED_VM_ID="$vm_id"
     
     print_subheader "Importing disk"
-    qm importdisk "$vm_id" "$image_path" "$storage" 2>/dev/null || { qm destroy "$vm_id" 2>/dev/null; die "Failed to import disk"; }
+    local import_output=$(qm importdisk "$vm_id" "$image_path" "$storage" 2>&1)
+    if [[ $? -ne 0 ]]; then
+        qm destroy "$vm_id" 2>/dev/null
+        die "Failed to import disk: $import_output"
+    fi
+    
+    # Extract the actual disk name from importdisk output
+    # Output usually contains: "Successfully imported disk as 'unused0:storage:vm-107-disk-0'"
+    local disk_name=$(echo "$import_output" | grep -oP "unused\d+:\K${storage}:[^'\"]+")
+    
+    # Fallback to standard naming if extraction fails
+    if [[ -z "$disk_name" ]]; then
+        disk_name="${storage}:vm-${vm_id}-disk-0"
+    fi
     
     print_subheader "Configuring VM"
-    qm set "$vm_id" --scsihw virtio-scsi-single --scsi0 "${storage}:vm-${vm_id}-disk-0,cache=writeback,discard=on,ssd=1" >/dev/null 2>&1
+    qm set "$vm_id" --scsihw virtio-scsi-single --scsi0 "${disk_name},cache=writeback,discard=on,ssd=1" >/dev/null 2>&1
     qm set "$vm_id" --boot c --bootdisk scsi0 >/dev/null 2>&1
     qm set "$vm_id" --scsi2 "${storage}:cloudinit" >/dev/null 2>&1
     qm set "$vm_id" --agent enabled=1 --serial0 socket --vga serial0 >/dev/null 2>&1

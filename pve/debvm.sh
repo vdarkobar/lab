@@ -199,27 +199,52 @@ validate_cores() {
     return 0
 }
 
+
 validate_storage_space() {
     local storage="$1"
     log STEP "Validating storage space"
-    
-    # Try to get storage status from pvesm (column 4 is 'avail' in bytes)
-    local available_bytes=$(pvesm status -storage "$storage" 2>/dev/null | awk 'NR==2 {print $4}')
-    
-    if [[ -n "$available_bytes" ]] && [[ "$available_bytes" =~ ^[0-9]+$ ]]; then
-        local available_gb=$((available_bytes / 1024 / 1024 / 1024))
-        
-        if [[ "$available_gb" -lt "$MIN_DISK_SPACE_GB" ]]; then
-            log ERROR "Insufficient space on $storage: ${available_gb}GB available, ${MIN_DISK_SPACE_GB}GB required"
+
+    local available_kib
+    available_kib="$(pvesm status -storage "$storage" 2>/dev/null | awk -v s="$storage" 'NR>1 && $1==s {print $6; exit}')"
+
+    if [[ "$available_kib" =~ ^[0-9]+$ ]]; then
+        local available_gib=$(( available_kib / 1024 / 1024 ))
+
+        if (( available_gib < MIN_DISK_SPACE_GB )); then
+            log ERROR "Insufficient space on $storage: ${available_gib}GB available, ${MIN_DISK_SPACE_GB}GB required"
             return 1
         fi
-        log SUCCESS "Storage space: ${available_gb}GB available"
-        return 0
-    else
-        log WARN "Could not determine storage space for $storage (will proceed anyway)"
+
+        log SUCCESS "Storage space: ${available_gib}GB available"
         return 0
     fi
+
+    log WARN "Could not determine storage space for $storage (will proceed anyway)"
+    return 0
 }
+
+
+#validate_storage_space() {
+#    local storage="$1"
+#    log STEP "Validating storage space"
+#    
+#    # Try to get storage status from pvesm (column 4 is 'avail' in bytes)
+#    local available_bytes=$(pvesm status -storage "$storage" 2>/dev/null | awk 'NR==2 {print $4}')
+#    
+#    if [[ -n "$available_bytes" ]] && [[ "$available_bytes" =~ ^[0-9]+$ ]]; then
+#        local available_gb=$((available_bytes / 1024 / 1024 / 1024))
+#        
+#        if [[ "$available_gb" -lt "$MIN_DISK_SPACE_GB" ]]; then
+#            log ERROR "Insufficient space on $storage: ${available_gb}GB available, ${MIN_DISK_SPACE_GB}GB required"
+#            return 1
+#        fi
+#        log SUCCESS "Storage space: ${available_gb}GB available"
+#        return 0
+#    else
+#        log WARN "Could not determine storage space for $storage (will proceed anyway)"
+#       return 0
+#    fi
+#}
 
 check_vm_exists() {
     local vm_id="$1"

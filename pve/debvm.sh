@@ -324,8 +324,11 @@ prompt_password() {
 
 prompt_image_url() {
     echo
-    print_info "Default: $DEFAULT_IMAGE_URL"
-    read -p "Enter custom URL or press Enter: " -r image_url
+    print_info "Cloud Image URL"
+    print_subheader "Default: Debian 13 Generic Cloud Image"
+    print_subheader "${C_DIM}${DEFAULT_IMAGE_URL}${C_RESET}"
+    echo
+    read -p "Enter custom image URL (or press Enter for default): " -r image_url
     echo "${image_url:-$DEFAULT_IMAGE_URL}"
 }
 

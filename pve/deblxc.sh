@@ -203,8 +203,7 @@ prompt_ct_id() {
     local default_id=$(get_next_ct_id)
     echo
     print_info "Next available CT ID: $default_id"
-    echo -n "Enter Container ID [default: $default_id]: "
-    read -r ct_id
+    read -p "Enter Container ID [default: $default_id]: " -r ct_id
     ct_id="${ct_id:-$default_id}"
     [[ ! "$ct_id" =~ ^[0-9]+$ ]] && log ERROR "Container ID must be a number" && return 1
     check_ct_exists "$ct_id" || return 1
@@ -214,8 +213,7 @@ prompt_ct_id() {
 prompt_hostname() {
     while true; do
         echo
-        echo -n "Enter hostname [default: $DEFAULT_HOSTNAME]: "
-        read -r hostname
+        read -p "Enter hostname [default: $DEFAULT_HOSTNAME]: " -r hostname
         hostname="${hostname:-$DEFAULT_HOSTNAME}"
         validate_hostname "$hostname" && echo "$hostname" && return 0
     done
@@ -224,8 +222,7 @@ prompt_hostname() {
 prompt_username() {
     while true; do
         echo
-        echo -n "Enter username for non-root user: "
-        read -r username
+        read -p "Enter username for non-root user: " -r username
         [[ -z "$username" ]] && log ERROR "Username cannot be empty" && continue
         validate_username "$username" && echo "$username" && return 0
     done
@@ -234,13 +231,11 @@ prompt_username() {
 prompt_password() {
     while true; do
         echo
-        echo -n "Enter password: "
-        read -rs password
+        read -p "Enter password: " -rs password
         echo
         [[ -z "$password" ]] && log ERROR "Password cannot be empty" && continue
         validate_password "$password" || continue
-        echo -n "Confirm password: "
-        read -rs password_confirm
+        read -p "Confirm password: " -rs password_confirm
         echo
         [[ "$password" = "$password_confirm" ]] && echo "$password" && return 0
         log ERROR "Passwords do not match"
@@ -249,8 +244,7 @@ prompt_password() {
 
 prompt_memory() {
     echo
-    echo -n "Enter memory in MB [default: $DEFAULT_MEMORY]: "
-    read -r memory
+    read -p "Enter memory in MB [default: $DEFAULT_MEMORY]: " -r memory
     memory="${memory:-$DEFAULT_MEMORY}"
     validate_memory "$memory" || return 1
     echo "$memory"
@@ -260,8 +254,7 @@ prompt_cores() {
     local max_cores=$(nproc)
     echo
     print_info "Cores range: 1 to $max_cores"
-    echo -n "Enter cores [default: $DEFAULT_CORES]: "
-    read -r cores
+    read -p "Enter cores [default: $DEFAULT_CORES]: " -r cores
     cores="${cores:-$DEFAULT_CORES}"
     validate_cores "$cores" || return 1
     echo "$cores"
@@ -275,8 +268,7 @@ prompt_bridge() {
     echo
     print_info "Available bridges:"
     printf '%s\n' "${bridges[@]}" | nl -s ') '
-    echo -n "Enter bridge [default: $DEFAULT_BRIDGE]: "
-    read -r bridge_input
+    read -p "Enter bridge [default: $DEFAULT_BRIDGE]: " -r bridge_input
     local bridge="${bridge_input:-$DEFAULT_BRIDGE}"
     
     [[ "$bridge_input" =~ ^[0-9]+$ ]] && bridge="${bridges[$((bridge_input-1))]}"
@@ -293,8 +285,7 @@ prompt_template_storage() {
     print_info "Available template storages:"
     printf '%s\n' "${storages[@]}" | nl -s ') '
     local default_storage="${storages[0]}"
-    echo -n "Select template storage [default: $default_storage]: "
-    read -r storage_input
+    read -p "Select template storage [default: $default_storage]: " -r storage_input
     local storage="${storage_input:-$default_storage}"
     
     [[ "$storage_input" =~ ^[0-9]+$ ]] && storage="${storages[$((storage_input-1))]}"
@@ -311,8 +302,7 @@ prompt_rootfs_storage() {
     print_info "Available rootfs storages:"
     printf '%s\n' "${storages[@]}" | nl -s ') '
     local default_storage="${storages[0]}"
-    echo -n "Select rootfs storage [default: $default_storage]: "
-    read -r storage_input
+    read -p "Select rootfs storage [default: $default_storage]: " -r storage_input
     local storage="${storage_input:-$default_storage}"
     
     [[ "$storage_input" =~ ^[0-9]+$ ]] && storage="${storages[$((storage_input-1))]}"
@@ -376,8 +366,7 @@ show_configuration_summary() {
     echo
     
     if [[ "$IS_INTERACTIVE" = true ]]; then
-        echo -n "Proceed? [Y/n]: "
-        read -r confirm
+        read -p "Proceed? [Y/n]: " -r confirm
         [[ "$confirm" =~ ^[Nn] ]] && log INFO "Cancelled" && exit 0
     fi
 }

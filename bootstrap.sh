@@ -153,6 +153,7 @@ download_components() {
         "apps/docker.sh|Docker Installer"
         "apps/npm.sh|Nginx Proxy Manager Installer"
         "apps/unbound.sh|Unbound DNS Installer"
+        "apps/samba.sh|Samba File Server Installer"
     )
     
     # Download each file

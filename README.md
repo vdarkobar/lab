@@ -22,3 +22,27 @@ chmod +x bootstrap.sh
 <br>
 
 <a href="https://github.com/vdarkobar/lab/blob/main/misc/repo-setup.md#simple-repository-setup---complete-guide">*Repo setup*</a>, <a href="https://github.com/vdarkobar/lab/blob/main/misc/checksum-verification.md#checksum-verification-guide">*Checksum verification*</a>, <a href="https://github.com/vdarkobar/lab/blob/main/misc/adding-apps.md#adding-new-apps-to-hardeningsh---quick-guide">*Adding apps*</a>  
+
+<br>
+
+```
+bootstrap.sh
+│
+└── Menu
+    ├── 1) Debian VM Template
+    ├── 2) Debian LXC Template
+    ├── 3) Harden Debian System ──┐
+    └── 4) Exit                   │
+                                  ▼
+                             App Menu
+                             ├── 1) Docker
+                             ├── 2) Nginx Proxy Manager
+                             ├── 3) Portainer
+                             ├── 4) Unbound DNS ──┐
+                             └── N) Done          │
+                                                  ▼
+                                             Config Menu
+                                             ├── 1) Configure VLANs
+                                             ├── 2) Configure Hosts
+                                             └── 3) Skip
+```

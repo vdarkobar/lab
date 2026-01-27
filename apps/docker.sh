@@ -36,6 +36,12 @@ set -Eeuo pipefail
 export DEBIAN_FRONTEND=noninteractive
 trap 'echo "FATAL: Docker install failed at line '"$LINENO"': '"$BASH_COMMAND"'" >&2; exit 1' ERR
 
+# Check if running on PVE host (should not be)
+if [[ -f /etc/pve/.version ]] || command -v pveversion &>/dev/null; then
+    echo "ERROR: This script should not run on Proxmox VE host. Run inside a VM or LXC container." >&2
+    exit 1
+fi
+
 # Only clear screen if run directly (not when called from another script)
 [[ "${BASH_SOURCE[0]}" == "${0}" ]] && clear || true
 

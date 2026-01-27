@@ -133,6 +133,12 @@ log_msg() {
 preflight_checks() {
     print_header "Preflight Checks"
     
+    # Check if running on PVE host (should not be)
+    if [[ -f /etc/pve/.version ]] || command -v pveversion &>/dev/null; then
+        die "This script should not run on Proxmox VE host. Run inside a VM or LXC container."
+    fi
+    print_success "Not running on PVE host"
+    
     # Check for sudo/root access
     if [[ $EUID -ne 0 ]]; then
         if ! command -v sudo &>/dev/null; then

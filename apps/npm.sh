@@ -118,6 +118,11 @@ show_header() {
 }
 
 check_privileges() {
+    # Check if running on PVE host (should not be)
+    if [[ -f /etc/pve/.version ]] || command -v pveversion &>/dev/null; then
+        die "This script should not run on Proxmox VE host. Run inside a VM or LXC container."
+    fi
+    
     if [[ "$EUID" -ne 0 ]]; then
         die "This script must be run as root or with sudo"
     fi

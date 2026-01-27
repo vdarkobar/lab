@@ -34,7 +34,7 @@ set -euo pipefail
 
 readonly REPO_URL="https://raw.githubusercontent.com/vdarkobar/lab/main"
 readonly INSTALL_DIR="$HOME/lab"
-readonly VERSION="1.0.0"
+readonly VERSION="1.1.0"
 
 # Simple colors (no dependencies)
 readonly C_GREEN='\033[0;32m'
@@ -146,6 +146,7 @@ download_components() {
     # List of files to download: path|display_name
     local files=(
         "lib/formatting.sh|Formatting Library"
+        "lib/helpers.sh|Helper Functions Library"
         "server/hardening.sh|Hardening Script"
         "server/jump.sh|Jump Server Script"
         "pve/debvm.sh|Debian VM Template Script"

@@ -639,14 +639,15 @@ EOF
 
     # Apply settings (may fail in unprivileged containers)
     print_step "Applying sysctl settings..."
-    if sudo sysctl --system >/dev/null 2>&1; then
+    if sudo sysctl -p "$sysctl_file" >/dev/null 2>&1; then
         log SUCCESS "Network security settings applied"
     else
         print_warning "Some settings failed (expected in unprivileged containers)"
+        # Show which settings were denied (|| true prevents pipefail exit)
         sudo sysctl -p "$sysctl_file" 2>&1 | grep -i "permission denied" | \
         while read -r line; do
             print_subheader "Denied: $(echo "$line" | awk '{print $2}')"
-        done
+        done || true
     fi
     echo
 }

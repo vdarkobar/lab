@@ -429,10 +429,11 @@ EOF
     
     # Apply (may fail in unprivileged LXC)
     print_step "Applying sysctl settings..."
-    if sudo sysctl --system >/dev/null 2>&1; then
+    if sudo sysctl -p "$dropin" >/dev/null 2>&1; then
         print_success "Sysctl settings applied"
     else
         print_warning "Some sysctl keys denied (normal in unprivileged LXC)"
+        # Suppress errors, || true prevents pipefail exit
         sudo sysctl -p "$dropin" 2>/dev/null || true
     fi
     

@@ -28,14 +28,14 @@ chmod +x bootstrap.sh
     ├── 1) <a href="https://github.com/vdarkobar/lab/tree/main/misc/DebianVMTemplate.md">Debian VM Template</a>
     ├── 2) <a href="https://github.com/vdarkobar/lab/tree/main/misc/DebianLXCTemplate.md">Debian LXC Template</a>
     ├── 3) <a href="https://github.com/vdarkobar/lab/tree/main/misc/HardenDebianSystem.md">Harden Debian System</a> ──┐
-    └── 4) Exit                   │
+    ├── 4) <a href="https://github.com/vdarkobar/lab/tree/main/misc/JumpServer.md">Jump Server</a>             │
+    └── 5) Exit                   │
                                   ▼
                              App Menu
                              ├── 1) <a href="https://github.com/vdarkobar/lab/tree/main/misc/Docker.md">Docker</a>
                              ├── 2) <a href="https://github.com/vdarkobar/lab/tree/main/misc/NginxProxyManager.md">Nginx Proxy Manager</a>
                              ├── 3) <a href="https://github.com/vdarkobar/lab/tree/main/misc/UnboundDNS.md">Unbound DNS</a> ──┐
                              ├── 4) <a href="https://github.com/vdarkobar/lab/tree/main/misc/SambaFileServer.md">Samba File Server</a>
-                             ├── 5) <a href="https://github.com/vdarkobar/lab/tree/main/misc/JumpServer.md">Jump Server</a>   │
                              └── N) Done          │
                                                   ▼
                                              Config Menu

@@ -5,7 +5,7 @@
 # Hardens a Debian server for secure SSH access with 2FA                    #
 #############################################################################
 
-readonly SCRIPT_VERSION="2.0.0"
+readonly SCRIPT_VERSION="2.1.0"
 
 # Handle --help flag early (before sourcing libraries)
 case "${1:-}" in
@@ -37,11 +37,12 @@ case "${1:-}" in
         echo "  SKIP_REBOOT=true    Skip reboot prompt"
         echo
         echo "Files created:"
-        echo "  /var/log/lab/jump-*.log                Installation log"
-        echo "  ~/.ssh/id_ed25519                      SSH private key"
-        echo "  ~/.ssh/id_ed25519.pub                  SSH public key"
-        echo "  /etc/sysctl.d/99-bastion-hardening.conf"
-        echo "  /etc/fail2ban/jail.local"
+        echo "  /var/log/lab/jump-*.log                   Installation log"
+        echo "  ~/.ssh/id_ed25519                         SSH private key"
+        echo "  ~/.ssh/id_ed25519.pub                     SSH public key"
+        echo "  /etc/ssh/sshd_config.d/99-lab-bastion.conf    SSH hardening"
+        echo "  /etc/sysctl.d/99-lab-bastion.conf             Sysctl hardening"
+        echo "  /etc/fail2ban/jail.d/99-lab-bastion.conf      Fail2Ban config"
         echo
         echo "Post-install:"
         echo "  SSH: ssh user@host -p 22"
@@ -335,30 +336,35 @@ configure_fail2ban() {
         return 0
     fi
     
-    # Create jail.local from jail.conf if not exists
-    if [[ ! -f /etc/fail2ban/jail.local ]]; then
-        sudo cp /etc/fail2ban/jail.conf /etc/fail2ban/jail.local
-        print_success "Created jail.local"
-    fi
+    # Use drop-in config instead of editing jail.local
+    # This survives package upgrades and is fully idempotent
+    local dropin_dir="/etc/fail2ban/jail.d"
+    local dropin_file="${dropin_dir}/99-lab-bastion.conf"
     
-    local config="/etc/fail2ban/jail.local"
+    print_step "Creating Fail2Ban drop-in configuration..."
+    sudo mkdir -p "$dropin_dir"
     
-    # Fix Debian bug: set backend to systemd
-    sudo sed -i 's|backend = auto|backend = systemd|g' "$config"
+    # Write drop-in config (overwrites if exists - idempotent)
+    sudo tee "$dropin_file" > /dev/null << 'EOF'
+# Managed by lab/jump.sh - do not edit manually
+# Bastion host Fail2Ban settings
+
+[DEFAULT]
+# Use systemd backend (fixes Debian bug with auto backend)
+backend = systemd
+
+# Stricter limits: 3 attempts, 15 minute ban
+bantime = 15m
+maxretry = 3
+findtime = 10m
+
+[sshd]
+enabled = true
+EOF
+
+    print_success "Fail2Ban drop-in config created: $dropin_file"
     
-    # Enable SSH jail (add enabled = true after [sshd] section)
-    if ! grep -q "^\[sshd\]" "$config" || ! grep -A1 "^\[sshd\]" "$config" | grep -q "enabled = true"; then
-        sudo awk '/\[sshd\]/ && ++n == 2 {print; print "enabled = true"; next}1' "$config" > /tmp/jail.tmp
-        sudo mv /tmp/jail.tmp "$config"
-    fi
-    
-    # Set bantime to 15m
-    sudo sed -i 's|bantime  = 10m|bantime  = 15m|g' "$config"
-    
-    # Set maxretry to 3
-    sudo sed -i 's|maxretry = 5|maxretry = 3|g' "$config"
-    
-    # Restart fail2ban
+    # Enable and restart fail2ban
     sudo systemctl enable fail2ban >/dev/null 2>&1
     sudo systemctl restart fail2ban >/dev/null 2>&1
     
@@ -393,17 +399,14 @@ secure_shared_memory() {
 configure_sysctl() {
     print_header "Configuring Sysctl (LXC-safe)"
     
-    local dropin="/etc/sysctl.d/99-bastion-hardening.conf"
+    local dropin="/etc/sysctl.d/99-lab-bastion.conf"
     
-    # Backup if exists
-    if [[ -f "$dropin" ]]; then
-        sudo cp -a "$dropin" "${dropin}.bak"
-    fi
+    print_step "Creating sysctl drop-in configuration..."
     
-    # Create config
+    # Write drop-in config (overwrites if exists - idempotent)
     sudo tee "$dropin" >/dev/null <<'EOF'
-# Bastion hardening sysctl settings
-# Managed by jump.sh
+# Managed by lab/jump.sh - do not edit manually
+# Bastion hardening sysctl settings (LXC-safe)
 
 # Reverse path filtering
 net.ipv4.conf.default.rp_filter = 1
@@ -422,8 +425,11 @@ net.ipv6.conf.all.accept_source_route = 0
 net.ipv4.conf.all.log_martians = 1
 EOF
     
+    print_success "Sysctl drop-in config created: $dropin"
+    
     # Apply (may fail in unprivileged LXC)
-    if sudo sysctl -p "$dropin" >/dev/null 2>&1; then
+    print_step "Applying sysctl settings..."
+    if sudo sysctl --system >/dev/null 2>&1; then
         print_success "Sysctl settings applied"
     else
         print_warning "Some sysctl keys denied (normal in unprivileged LXC)"
@@ -484,84 +490,112 @@ configure_pam_2fa() {
 configure_ssh() {
     print_header "Configuring SSH"
     
-    local config="/etc/ssh/sshd_config"
+    local sshd_config="/etc/ssh/sshd_config"
+    local dropin_dir="/etc/ssh/sshd_config.d"
+    local dropin_file="${dropin_dir}/99-lab-bastion.conf"
+    local backup="/tmp/sshd_bastion_backup_$$"
     local user=$(whoami)
     
-    # Backup
-    if [[ ! -f "${config}.orig" ]]; then
-        sudo cp "$config" "${config}.orig"
+    # Ensure drop-in directory exists
+    sudo mkdir -p "$dropin_dir"
+    
+    # Check if Include directive exists in main config
+    print_step "Checking SSH Include directive..."
+    if ! grep -qE '^[[:space:]]*Include.*/etc/ssh/sshd_config\.d/' "$sshd_config" 2>/dev/null; then
+        print_warning "Adding Include directive to $sshd_config"
+        # Portable prepend: create new file with Include + original content
+        local include_line="Include /etc/ssh/sshd_config.d/*.conf"
+        local tmpfile="${sshd_config}.labtmp"
+        { printf '%s\n' "$include_line"; sudo cat "$sshd_config"; } | sudo tee "$tmpfile" > /dev/null
+        sudo mv "$tmpfile" "$sshd_config"
+    else
+        print_success "Include directive already present"
     fi
     
-    print_step "Hardening SSH configuration..."
-    
-    # Enable challenge-response
-    sudo sed -i 's|KbdInteractiveAuthentication no|#KbdInteractiveAuthentication no|g' "$config"
-    
-    # Verbose logging
-    sudo sed -i 's|#LogLevel INFO|LogLevel VERBOSE|g' "$config"
-    
-    # Disable root login
-    sudo sed -i 's|#PermitRootLogin prohibit-password|PermitRootLogin no|g' "$config"
-    
-    # Strict modes
-    sudo sed -i 's|#StrictModes yes|StrictModes yes|g' "$config"
-    
-    # Limit auth attempts
-    sudo sed -i 's|#MaxAuthTries 6|MaxAuthTries 3|g' "$config"
-    
-    # Limit sessions
-    sudo sed -i 's|#MaxSessions 10|MaxSessions 2|g' "$config"
-    
-    # Disable rhosts
-    sudo sed -i 's|#IgnoreRhosts yes|IgnoreRhosts yes|g' "$config"
-    
-    # Disable password auth
-    sudo sed -i 's|#PasswordAuthentication yes|PasswordAuthentication no|g' "$config"
-    
-    # Disable empty passwords
-    sudo sed -i 's|#PermitEmptyPasswords no|PermitEmptyPasswords no|g' "$config"
-    
-    # Enable agent forwarding (for jump server functionality)
-    sudo sed -i 's|#AllowAgentForwarding yes|AllowAgentForwarding yes|g' "$config"
-    
-    # Disable GSSAPI
-    sudo sed -i 's|#GSSAPIAuthentication no|GSSAPIAuthentication no|g' "$config"
-    
-    # Add strong ciphers (if not present)
-    if ! grep -q "^Ciphers" "$config"; then
-        sudo sed -i '/# Ciphers and keying/a Ciphers chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com,aes256-ctr,aes192-ctr,aes128-ctr' "$config"
+    # Backup original config if not done
+    if [[ ! -f "${sshd_config}.orig" ]]; then
+        sudo cp "$sshd_config" "${sshd_config}.orig"
     fi
     
-    if ! grep -q "^KexAlgorithms" "$config"; then
-        sudo sed -i '/^Ciphers/a KexAlgorithms curve25519-sha256@libssh.org,diffie-hellman-group-exchange-sha256' "$config"
-    fi
+    # Backup current drop-in if exists
+    [[ -f "$dropin_file" ]] && sudo cp "$dropin_file" "$backup"
     
-    if ! grep -q "^Protocol 2" "$config"; then
-        sudo sed -i '/^KexAlgorithms/a Protocol 2' "$config"
-    fi
+    print_step "Creating SSH bastion drop-in configuration..."
     
-    # Add authentication methods
-    if ! grep -q "^AuthenticationMethods" "$config"; then
-        echo "AuthenticationMethods keyboard-interactive" | sudo tee -a "$config" >/dev/null
-    fi
+    # Write drop-in config for bastion/jump server with 2FA
+    sudo tee "$dropin_file" > /dev/null << EOF
+# Managed by lab/jump.sh - do not edit manually
+# Bastion/Jump Server SSH configuration with 2FA support
+
+# Logging
+LogLevel VERBOSE
+
+# Authentication
+PermitRootLogin no
+StrictModes yes
+MaxAuthTries 3
+MaxSessions 2
+IgnoreRhosts yes
+
+# Password/key auth
+PasswordAuthentication no
+PermitEmptyPasswords no
+GSSAPIAuthentication no
+
+# 2FA / Challenge-Response authentication
+ChallengeResponseAuthentication yes
+KbdInteractiveAuthentication yes
+AuthenticationMethods keyboard-interactive
+
+# Agent forwarding for jump functionality
+AllowAgentForwarding yes
+
+# Allowed ciphers and algorithms
+Protocol 2
+Ciphers chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com,aes256-ctr,aes192-ctr,aes128-ctr
+KexAlgorithms curve25519-sha256@libssh.org,diffie-hellman-group-exchange-sha256
+
+# Restrict SSH access to current user
+AllowUsers ${user}
+EOF
+
+    print_success "SSH bastion drop-in config created: $dropin_file"
     
-    if ! grep -q "^ChallengeResponseAuthentication yes" "$config"; then
-        echo "ChallengeResponseAuthentication yes" | sudo tee -a "$config" >/dev/null
+    # Validate SSH configuration
+    print_step "Validating SSH configuration..."
+    if ! sudo sshd -t -f "$sshd_config" 2>/dev/null; then
+        print_error "SSH configuration has errors, rolling back..."
+        if [[ -f "$backup" ]]; then
+            sudo mv "$backup" "$dropin_file"
+        else
+            sudo rm -f "$dropin_file"
+        fi
+        sudo systemctl restart sshd 2>/dev/null || true
+        die "SSH configuration validation failed"
     fi
-    
-    # Restrict to current user
-    if ! grep -q "^AllowUsers.*$user" "$config"; then
-        echo "AllowUsers $user" | sudo tee -a "$config" >/dev/null
-        print_success "SSH restricted to user: $user"
-    fi
-    
-    print_success "SSH hardened"
+    print_success "SSH configuration is valid"
     
     # Restart SSH
     print_step "Restarting SSH service..."
-    sudo systemctl restart sshd
-    print_success "SSH service restarted"
+    if sudo systemctl restart sshd 2>/dev/null || sudo systemctl restart ssh 2>/dev/null; then
+        sleep 1
+        if systemctl is-active --quiet sshd 2>/dev/null || systemctl is-active --quiet ssh 2>/dev/null; then
+            print_success "SSH service restarted and running"
+        else
+            print_error "SSH service not active after restart, rolling back..."
+            if [[ -f "$backup" ]]; then
+                sudo mv "$backup" "$dropin_file"
+            else
+                sudo rm -f "$dropin_file"
+            fi
+            sudo systemctl restart sshd 2>/dev/null || sudo systemctl restart ssh 2>/dev/null || true
+            die "SSH service failed after restart"
+        fi
+    else
+        print_warning "SSH service restart may have failed"
+    fi
     
+    rm -f "$backup"
     echo
 }
 

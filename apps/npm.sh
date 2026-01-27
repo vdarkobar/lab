@@ -3,6 +3,46 @@
 ###################################################################################
 # Nginx Proxy Manager Installer - Debian 13                                     #
 ###################################################################################
+
+# Handle --help flag early
+case "${1:-}" in
+    --help|-h)
+        echo "Nginx Proxy Manager Installer v2.0.0"
+        echo
+        echo "Usage: $0 [--help]"
+        echo
+        echo "Installation:"
+        echo "  bootstrap.sh → hardening.sh → Select \"Nginx Proxy Manager\""
+        echo
+        echo "Environment variables:"
+        echo "  SKIP_REBOOT=true    Skip reboot prompt"
+        echo
+        echo "What it does:"
+        echo "  - Installs OpenResty (nginx)"
+        echo "  - Installs Node.js 22.x"
+        echo "  - Installs Certbot with Cloudflare DNS plugin"
+        echo "  - Builds NPM frontend and backend"
+        echo "  - Configures systemd services"
+        echo "  - Opens firewall ports 80, 443, 81"
+        echo
+        echo "Ports:"
+        echo "  81/tcp   NPM Admin UI"
+        echo "  80/tcp   HTTP Proxy"
+        echo "  443/tcp  HTTPS Proxy"
+        echo
+        echo "Default credentials:"
+        echo "  Email:    admin@example.com"
+        echo "  Password: changeme"
+        echo
+        echo "Files created:"
+        echo "  /app                        Application directory"
+        echo "  /data                       Data directory (SQLite)"
+        echo "  /var/log/lab/npm-*.log      Installation log"
+        exit 0
+        ;;
+esac
+
+###################################################################################
 #
 # DESCRIPTION:
 #   Installs Nginx Proxy Manager (NPM) with OpenResty, Node.js, and all

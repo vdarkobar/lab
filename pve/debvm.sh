@@ -1,8 +1,49 @@
 #!/bin/bash
 ###################################################################################
 # Proxmox VM Template Creator - Debian Cloud Image
-# v2.0.3
-#
+###################################################################################
+
+readonly SCRIPT_VERSION="2.0.3"
+
+# Handle --help flag early
+case "${1:-}" in
+    --help|-h)
+        echo "Proxmox VM Template Creator v${SCRIPT_VERSION}"
+        echo
+        echo "Usage: $0 [--help]"
+        echo
+        echo "Installation:"
+        echo "  bootstrap.sh → Select \"Create Debian VM Template\""
+        echo
+        echo "Environment variables (for non-interactive mode):"
+        echo "  VM_ID              VM ID (e.g., \"9000\")"
+        echo "  VM_HOSTNAME        Hostname (default: debvm)"
+        echo "  VM_USERNAME        Non-root username"
+        echo "  VM_PASSWORD        User password"
+        echo "  VM_STORAGE         Storage for VM disk (e.g., \"local-lvm\")"
+        echo "  VM_MEMORY          Memory in MB (default: 4096)"
+        echo "  VM_CORES           CPU cores (default: 4)"
+        echo "  VM_BRIDGE          Network bridge (default: vmbr0)"
+        echo "  IMAGE_URL          Custom cloud image URL"
+        echo "  SKIP_CHECKSUM      Set to \"true\" to skip verification"
+        echo "  KEEP_DOWNLOADS     Set to \"true\" to keep downloaded image"
+        echo
+        echo "Example (fully automated):"
+        echo "  VM_ID=9000 \\"
+        echo "  VM_HOSTNAME=debian-tpl \\"
+        echo "  VM_USERNAME=admin \\"
+        echo "  VM_PASSWORD='SecurePass1!' \\"
+        echo "  VM_STORAGE=local-lvm \\"
+        echo "  $0"
+        echo
+        echo "Files created:"
+        echo "  /var/lib/vz/snippets/userdata-<id>.yaml  Cloud-init config"
+        echo "  /var/log/lab/debvm-*.log                 Installation log"
+        exit 0
+        ;;
+esac
+
+###################################################################################
 # Fixes applied:
 # - Correct storage free-space parsing (Available KiB is column 6)
 # - Robust download (no pipefail false-negatives)
@@ -18,7 +59,6 @@ trap 'echo "FATAL: line $LINENO: $BASH_COMMAND" >&2' ERR
 # CONFIGURATION
 ###################################################################################
 
-readonly SCRIPT_VERSION="2.0.3"
 readonly SCRIPT_NAME="$(basename "${BASH_SOURCE[0]}")"
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 

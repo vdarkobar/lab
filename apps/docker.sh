@@ -1,14 +1,43 @@
 #!/usr/bin/env bash
+
+########################################
+# Docker + Docker Compose (v2) install #
+########################################
+
+readonly VERSION="1.0.0"
+
+# Handle --help flag
+case "${1:-}" in
+    --help|-h)
+        echo "Docker + Compose (v2) Installer v${VERSION}"
+        echo
+        echo "Usage: $0 [--help]"
+        echo
+        echo "Installation:"
+        echo "  bootstrap.sh → hardening.sh → Select \"Docker\""
+        echo
+        echo "What it does:"
+        echo "  - Installs Docker CE, CLI, containerd"
+        echo "  - Installs Docker Compose v2 plugin"
+        echo "  - Adds current user to docker group"
+        echo "  - Configures Docker repository and GPG key"
+        echo
+        echo "Files created:"
+        echo "  /etc/apt/keyrings/docker.gpg         Docker GPG key"
+        echo "  /etc/apt/sources.list.d/docker.list  Docker repository"
+        echo
+        echo "Post-install:"
+        echo "  Log out and back in, or run: newgrp docker"
+        exit 0
+        ;;
+esac
+
 set -Eeuo pipefail
 export DEBIAN_FRONTEND=noninteractive
 trap 'echo "FATAL: Docker install failed at line '"$LINENO"': '"$BASH_COMMAND"'" >&2; exit 1' ERR
 
 # Only clear screen if run directly (not when called from another script)
 [[ "${BASH_SOURCE[0]}" == "${0}" ]] && clear || true
-
-########################################
-# Docker + Docker Compose (v2) install #
-########################################
 
 echo
 echo "Docker / Compose (v2) installer (idempotent, inline)"

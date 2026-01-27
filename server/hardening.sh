@@ -2,6 +2,49 @@
 
 #############################################################################
 # Debian 13 VM/LXC Server Hardening Script                                  #
+#############################################################################
+
+readonly SCRIPT_VERSION="2.1.0"
+
+# Handle --help flag early (before sourcing libraries)
+case "${1:-}" in
+    --help|-h)
+        echo "Debian Server Hardening Script v${SCRIPT_VERSION}"
+        echo
+        echo "Usage: $0 [--help]"
+        echo
+        echo "Installation:"
+        echo "  bootstrap.sh → Select \"Harden Debian System\""
+        echo
+        echo "Requirements:"
+        echo "  - Must run as NON-ROOT user with sudo privileges"
+        echo "  - Do NOT run with: sudo $0"
+        echo
+        echo "What it does:"
+        echo "  - Installs security packages (fail2ban, ufw, etc.)"
+        echo "  - Configures SSH hardening (disables password auth)"
+        echo "  - Sets up UFW firewall"
+        echo "  - Configures automatic security updates"
+        echo "  - Hardens sysctl settings"
+        echo "  - Locks root account"
+        echo "  - Offers app installation menu (Docker, NPM, Unbound, etc.)"
+        echo
+        echo "Files created:"
+        echo "  /var/log/hardening-*.log              Installation log"
+        echo "  /root/hardening-backups-*/            Config backups"
+        echo "  /etc/ssh/sshd_config.d/99-hardening.conf"
+        echo "  /etc/fail2ban/jail.local"
+        echo
+        echo "Available apps (via menu):"
+        echo "  - Docker + Compose v2"
+        echo "  - Nginx Proxy Manager"
+        echo "  - Portainer"
+        echo "  - Unbound DNS"
+        exit 0
+        ;;
+esac
+
+#############################################################################
 # Professional edition with enhanced output formatting                      #
 #                                                                            #
 # EXECUTION REQUIREMENTS:                                                   #
@@ -10,11 +53,11 @@
 #   - Script will use sudo internally for privileged operations             #
 #                                                                            #
 # CORRECT USAGE:                                                            #
-#   ./hardening_professional.sh                                             #
+#   ./hardening.sh                                                          #
 #                                                                            #
 # INCORRECT USAGE:                                                          #
-#   sudo ./hardening_professional.sh  ← DO NOT DO THIS                      #
-#   # ./hardening_professional.sh     ← DO NOT DO THIS                      #
+#   sudo ./hardening.sh  ← DO NOT DO THIS                                   #
+#   # ./hardening.sh     ← DO NOT DO THIS                                   #
 #############################################################################
 
 set -euo pipefail  # Exit on error, undefined vars, pipe failures
@@ -56,7 +99,6 @@ readonly APPS_BASE_URL="https://raw.githubusercontent.com/vdarkobar/lab/main/app
 # Configuration                                                  #
 #################################################################
 
-readonly SCRIPT_VERSION="2.1.0"
 readonly LOG_FILE="/var/log/hardening-$(date +%Y%m%d-%H%M%S).log"
 readonly BACKUP_DIR="/root/hardening-backups-$(date +%Y%m%d-%H%M%S)"
 

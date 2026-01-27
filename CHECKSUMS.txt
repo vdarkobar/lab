@@ -10,7 +10,7 @@
 685d01f33ba356bf3d51e53df30bdca7706b7eb835a1bd17449e19b5fa423634  lib/formatting.sh
 
 # Server Scripts
-506ba658a0ac44a08f5b1bb4bfa083c2665b10abe7a337b17a6ff7f360b17d5f  server/hardening.sh
+e7fe6c36153ccb5d21e46dd3e55ba87e936287dd92faf9004bfaf61c1189259b  server/hardening.sh
 01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b  server/jump.sh
 
 # PVE Scripts
@@ -18,6 +18,8 @@
 40581c88d7d699601d3303fd864130f0b889b7d7dc4cc97f29541e26232a1ec1  pve/debvm.sh
 
 # Application Scripts
-449b1b5776596533c2e6617c2107e488ca3790e851d2ebb6b10121a7f31fecb2  apps/docker.sh
-739d861d8717d906e6f54f98936090e0a0ef6bf38604b551c63772a1ba1d316c  apps/npm.sh
-8bcac40d91f1ed0c38a1c539602a07cde19ffd558dcafc0c1d1706aced1d78e7  apps/unbound.sh
+468ac5aab65c5b3c193948fcb92d13c0000f419411dbe2893731d2bb89c59f17  apps/docker.sh
+8d4e6e3f7530aa4f156c74d421bd02e81bfbcd752de9fd24d6d71127d96589de  apps/npm.sh
+e2c25c8ac89d0cb5ee5ac31cacc86847bac109ba4860d793d0c78b4329cbeb3b  apps/samba.sh
+89807e91e00564bf364f38d6a985b5db7a30af3f18a648244a8d8bf1069c70e9  apps/unbound.sh
+

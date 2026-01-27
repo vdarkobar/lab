@@ -21,7 +21,6 @@ chmod +x bootstrap.sh
 
 <br>
 
-```
 <pre>
 <a href="https://github.com/vdarkobar/lab/tree/main/misc/Bootstrap.md">bootstrap.sh</a>
 │
@@ -44,4 +43,3 @@ chmod +x bootstrap.sh
                                              ├── 2) Configure Hosts
                                              └── 3) Skip
 </pre>
-```

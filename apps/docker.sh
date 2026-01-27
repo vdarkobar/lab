@@ -4,7 +4,7 @@
 # Docker + Docker Compose (v2) install #
 ########################################
 
-readonly VERSION="1.0.0"
+readonly VERSION="1.1.0"
 
 # Handle --help flag
 case "${1:-}" in
@@ -21,6 +21,10 @@ case "${1:-}" in
         echo "  - Installs Docker Compose v2 plugin"
         echo "  - Adds current user to docker group"
         echo "  - Configures Docker repository and GPG key"
+        echo
+        echo "Environment variables:"
+        echo "  DOCKER_DIST=<codename>   Override Debian codename for Docker repo"
+        echo "                           (useful when Docker doesn't support latest Debian)"
         echo
         echo "Files created:"
         echo "  /etc/apt/keyrings/docker.gpg         Docker GPG key"
@@ -48,6 +52,68 @@ fi
 echo
 echo "Docker / Compose (v2) installer (idempotent, inline)"
 echo
+
+#################################################################
+# Source Helper Library (optional but recommended)              #
+#################################################################
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Try to source helpers for get_supported_codename
+HELPERS_LOADED=false
+if [[ -f "${SCRIPT_DIR}/../lib/helpers.sh" ]]; then
+    source "${SCRIPT_DIR}/../lib/helpers.sh"
+    HELPERS_LOADED=true
+elif [[ -f "${SCRIPT_DIR}/lib/helpers.sh" ]]; then
+    source "${SCRIPT_DIR}/lib/helpers.sh"
+    HELPERS_LOADED=true
+fi
+
+#################################################################
+# Codename Detection (inline fallback if helpers not loaded)    #
+#################################################################
+
+get_docker_codename() {
+    # If helpers loaded, use the proper function
+    if [[ "$HELPERS_LOADED" == true ]] && type get_supported_codename &>/dev/null; then
+        get_supported_codename docker
+        return
+    fi
+    
+    # Inline fallback implementation
+    local detected override_val
+    
+    # Check for env override first
+    override_val="${DOCKER_DIST:-}"
+    if [[ -n "$override_val" ]]; then
+        echo "$override_val"
+        return 0
+    fi
+    
+    # Detect codename
+    if [[ -f /etc/os-release ]]; then
+        # shellcheck disable=SC1091
+        . /etc/os-release
+        detected="${VERSION_CODENAME:-}"
+    fi
+    [[ -z "$detected" ]] && detected="$(lsb_release -cs 2>/dev/null || echo "unknown")"
+    
+    # Check if supported, fallback if not
+    case "$detected" in
+        bookworm|bullseye)
+            echo "$detected"
+            ;;
+        *)
+            echo "WARNING: '$detected' may not be in Docker repo, using bookworm" >&2
+            echo "WARNING: Override with DOCKER_DIST=<codename>" >&2
+            echo "bookworm"
+            ;;
+    esac
+}
+
+#################################################################
+# Main Installation                                              #
+#################################################################
 
 # Verify sudo access early
 if ! sudo -n true 2>/dev/null; then
@@ -89,7 +155,10 @@ fi
 # --- docker repo (idempotent) ---
 DOCKER_LIST="/etc/apt/sources.list.d/docker.list"
 ARCH="$(dpkg --print-architecture)"
-CODENAME="$(lsb_release -cs)"
+CODENAME="$(get_docker_codename)"
+
+echo "Using Debian codename for Docker repo: $CODENAME"
+
 DESIRED_LINE="deb [arch=${ARCH} signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian ${CODENAME} stable"
 
 if [[ -f "$DOCKER_LIST" ]] && grep -Fqx "$DESIRED_LINE" "$DOCKER_LIST"; then

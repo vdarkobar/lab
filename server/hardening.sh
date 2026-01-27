@@ -84,9 +84,8 @@ fi
 # Easy app registration - just add new entries to this array
 # Format: "display_name|script_name|detection_command"
 readonly APP_REGISTRY=(
-    "Nginx Proxy Manager|npm.sh|systemctl is-active --quiet openresty || systemctl is-active --quiet nginx-proxy-manager"
     "Docker|docker.sh|command -v docker >/dev/null 2>&1"
-    "Portainer|portainer.sh|docker ps -a --format '{{.Names}}' | grep -q 'portainer'"
+    "Nginx Proxy Manager|npm.sh|systemctl is-active --quiet openresty || systemctl is-active --quiet nginx-proxy-manager"
     "Unbound DNS|unbound.sh|systemctl is-active --quiet unbound"
     "Samba File Server|samba.sh|systemctl is-active --quiet smbd"
     # Add more apps here - one per line

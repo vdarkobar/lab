@@ -227,11 +227,12 @@ show_menu() {
     echo "1) Create Debian VM Template (debvm.sh - runs on PVE host)"
     echo "2) Create Debian LXC Template (deblxc.sh - runs on PVE host)"
     echo "3) Harden Debian System (hardening.sh - runs in VM/LXC)"
-    echo "4) Exit"
+    echo "4) Setup Jump Server (jump.sh - runs in VM/LXC)"
+    echo "5) Exit"
     echo
     
     while true; do
-        echo -n "Select option [1-4]: "
+        echo -n "Select option [1-5]: "
         read -r choice
         
         case "$choice" in
@@ -248,11 +249,15 @@ show_menu() {
                 break
                 ;;
             4)
+                run_jump_server
+                break
+                ;;
+            5)
                 print_step "Exiting"
                 exit 0
                 ;;
             *)
-                print_error "Invalid choice. Please select 1, 2, 3, or 4"
+                print_error "Invalid choice. Please select 1, 2, 3, 4, or 5"
                 ;;
         esac
     done
@@ -415,6 +420,95 @@ run_hardening() {
     else
         echo
         print_error "Hardening failed"
+        exit 1
+    fi
+}
+
+#################################################################
+# Run Jump Server Setup (on Debian 13 VM/LXC)                   #
+#################################################################
+
+run_jump_server() {
+    print_header "Jump Server Setup"
+    
+    # Check if running on Debian
+    if [[ ! -f /etc/debian_version ]]; then
+        print_error "This option must run on Debian system"
+        print_info "Detected: Not Debian"
+        exit 1
+    fi
+    
+    # Check Debian version
+    local debian_version=$(cat /etc/debian_version)
+    if [[ ! "$debian_version" =~ ^13 ]]; then
+        print_warning "Expected Debian 13, found version: $debian_version"
+        echo -n "Continue anyway? (yes/no): "
+        read -r response
+        if [[ "$response" != "yes" ]]; then
+            die "Jump Server setup cancelled"
+        fi
+    else
+        print_success "Debian 13 detected"
+    fi
+    
+    # Check for sudo (required - must run as non-root user with sudo)
+    if ! command -v sudo >/dev/null 2>&1; then
+        print_error "sudo is not installed"
+        print_error "Jump Server script requires sudo"
+        echo
+        print_info "Install sudo first (as root):"
+        echo "  ${C_CYAN}apt update && apt install sudo${C_RESET}"
+        echo
+        print_info "Then add your user to sudo group:"
+        echo "  ${C_CYAN}usermod -aG sudo username${C_RESET}"
+        echo
+        print_info "Then run jump.sh as that non-root user"
+        exit 1
+    fi
+    
+    # Check if running as root (should not be)
+    if [[ $EUID -eq 0 ]]; then
+        print_error "Do not run as root!"
+        print_error "Jump Server must run as non-root user with sudo privileges"
+        echo
+        print_info "Create a user first (as root):"
+        echo "  ${C_CYAN}adduser username${C_RESET}"
+        echo "  ${C_CYAN}usermod -aG sudo username${C_RESET}"
+        echo
+        print_info "Then run as that user:"
+        echo "  ${C_CYAN}su - username${C_RESET}"
+        echo "  ${C_CYAN}cd ~/lab/server && ./jump.sh${C_RESET}"
+        exit 1
+    fi
+    
+    print_success "Running as non-root user: $(whoami)"
+    print_success "sudo is available"
+    
+    # Run jump server setup
+    cd "$INSTALL_DIR/server" || die "Cannot change to server directory"
+    
+    # Check if jump.sh exists
+    if [[ ! -f "jump.sh" ]]; then
+        print_error "jump.sh not found"
+        print_warning "Jump Server script not yet available"
+        echo
+        print_step "Check repository for updates:"
+        echo "  https://github.com/vdarkobar/lab"
+        exit 1
+    fi
+    
+    chmod +x jump.sh
+    
+    echo
+    print_step "Launching jump.sh..."
+    echo
+    
+    if ./jump.sh; then
+        echo
+        print_success "Jump Server setup completed!"
+    else
+        echo
+        print_error "Jump Server setup failed"
         exit 1
     fi
 }

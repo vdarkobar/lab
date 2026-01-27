@@ -48,7 +48,7 @@ bootstrap.sh
                                              └── 3) Skip
 ```
 
-```
+
 bootstrap.sh
 │
 └── Menu
@@ -69,4 +69,4 @@ bootstrap.sh
                                                                                                                                                                                                                ├── 1) <a href="https://github.com/vdarkobar/lab/tree/main/misc/ConfigureVLANs.md">Configure VLANs</a>
                                                                                                                                                                                                                ├── 2) <a href="https://github.com/vdarkobar/lab/tree/main/misc/ConfigureHosts.md">Configure Hosts</a>
                                                                                                                                                                                                                └── 3) Skip
-```
+

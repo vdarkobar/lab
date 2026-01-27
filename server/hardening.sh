@@ -88,6 +88,7 @@ readonly APP_REGISTRY=(
     "Docker|docker.sh|command -v docker >/dev/null 2>&1"
     "Portainer|portainer.sh|docker ps -a --format '{{.Names}}' | grep -q 'portainer'"
     "Unbound DNS|unbound.sh|systemctl is-active --quiet unbound"
+    "Samba File Server|samba.sh|systemctl is-active --quiet smbd"
     # Add more apps here - one per line
     # "App Name|script.sh|detection command that returns 0 if installed"
 )

@@ -892,8 +892,8 @@ show_app_menu() {
             print_success "Selected: $display_name"
             echo
             
-            # Download and install
-            download_and_install_app "$script_name" "$display_name"
+            # Install from local script (falls back to download if not found)
+            install_app "$script_name" "$display_name"
             return 0
         else
             print_error "Invalid selection. Please enter a number between 1 and $((app_count + 1))"
@@ -902,7 +902,74 @@ show_app_menu() {
 }
 
 #################################################################
-# Download and Install Application                              #
+# Install Application from Local Scripts                        #
+#################################################################
+
+install_app() {
+    local script_name="$1"
+    local display_name="$2"
+    local local_script="${SCRIPT_DIR}/../apps/${script_name}"
+    local checksums_file="${SCRIPT_DIR}/../CHECKSUMS.txt"
+    local checksum_verified=false
+    
+    print_header "Installing: $display_name"
+    
+    # Check if local script exists
+    if [[ -f "$local_script" ]]; then
+        print_success "Found local script: ${local_script}"
+        
+        # Verify checksum
+        print_step "Verifying integrity..."
+        
+        if [[ -f "$checksums_file" ]]; then
+            local expected_hash=$(grep "apps/${script_name}" "$checksums_file" | grep -v '^#' | awk '{print $1}')
+            
+            if [[ -n "$expected_hash" ]]; then
+                local actual_hash=$(sha256sum "$local_script" | awk '{print $1}')
+                
+                if [[ "$actual_hash" == "$expected_hash" ]]; then
+                    print_success "Checksum verified: ${C_DIM}${actual_hash:0:16}...${C_RESET}"
+                    checksum_verified=true
+                else
+                    print_error "Expected: ${C_DIM}${expected_hash:0:16}...${C_RESET}"
+                    print_error "Got:      ${C_DIM}${actual_hash:0:16}...${C_RESET}"
+                    print_error "Checksum verification FAILED!"
+                    print_error "Local script may have been modified or is outdated"
+                    return 1
+                fi
+            else
+                print_warning "No checksum found for ${script_name}"
+            fi
+        else
+            print_warning "CHECKSUMS.txt not found"
+        fi
+        
+        # Execute the local script
+        echo
+        print_step "Executing ${script_name}..."
+        chmod +x "$local_script"
+        
+        if sudo -E bash "$local_script"; then
+            log SUCCESS "${display_name} installed successfully"
+            print_success "${display_name} installation completed"
+        else
+            log ERROR "${display_name} installation failed (exit code: $?)"
+            print_error "${display_name} installation failed"
+            return 1
+        fi
+    else
+        # Fallback: download if local script not found
+        print_warning "Local script not found: ${local_script}"
+        print_step "Falling back to download..."
+        download_and_install_app "$script_name" "$display_name"
+        return $?
+    fi
+    
+    echo
+}
+
+#################################################################
+# Download and Install Application (fallback)                   #
 #################################################################
 
 download_and_install_app() {
@@ -913,7 +980,7 @@ download_and_install_app() {
     local checksums_file="${SCRIPT_DIR}/../CHECKSUMS.txt"
     local checksum_verified=false
     
-    print_header "Installing: $display_name"
+    print_header "Installing: $display_name (downloading)"
     
     # Download script
     print_step "Downloading ${script_name}..."

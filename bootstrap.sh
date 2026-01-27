@@ -150,6 +150,9 @@ download_components() {
         "server/jump.sh|Jump Server Script"
         "pve/debvm.sh|Debian VM Template Script"
         "pve/deblxc.sh|Debian LXC Template Script"
+        "apps/docker.sh|Docker Installer"
+        "apps/npm.sh|Nginx Proxy Manager Installer"
+        "apps/unbound.sh|Unbound DNS Installer"
     )
     
     # Download each file

@@ -189,6 +189,19 @@ die() {
 }
 
 #################################################################
+# Source Helper Library (if present)                            #
+#################################################################
+
+# Source helpers.sh for idempotent file operations, config helpers, etc.
+# This is optional - formatting.sh works standalone for basic output
+_HELPERS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -f "${_HELPERS_DIR}/helpers.sh" ]]; then
+    # shellcheck source=helpers.sh
+    source "${_HELPERS_DIR}/helpers.sh"
+fi
+unset _HELPERS_DIR
+
+#################################################################
 # Export Functions for Use in Other Scripts                     #
 #################################################################
 

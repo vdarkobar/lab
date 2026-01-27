@@ -15,7 +15,9 @@ case "${1:-}" in
         echo "  bootstrap.sh → hardening.sh → Select \"Nginx Proxy Manager\""
         echo
         echo "Environment variables:"
-        echo "  SKIP_REBOOT=true    Skip reboot prompt"
+        echo "  SKIP_REBOOT=true       Skip reboot prompt"
+        echo "  OPENRESTY_DIST=<name>  Override Debian codename for OpenResty repo"
+        echo "                         (useful when OpenResty doesn't support latest Debian)"
         echo
         echo "What it does:"
         echo "  - Installs OpenResty (nginx)"
@@ -80,17 +82,65 @@ set -euo pipefail
 # CONFIGURATION
 ###################################################################################
 
-readonly SCRIPT_VERSION="2.0.0"
+readonly SCRIPT_VERSION="2.1.0"
 readonly SCRIPT_NAME="$(basename "${BASH_SOURCE[0]}")"
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Source formatting library
+# Source formatting library (also loads helpers.sh if present)
 if [[ -f "${SCRIPT_DIR}/../lib/formatting.sh" ]]; then
     source "${SCRIPT_DIR}/../lib/formatting.sh"
 else
     echo "ERROR: formatting.sh not found at ${SCRIPT_DIR}/../lib/formatting.sh" >&2
     exit 1
 fi
+
+# Check if helpers were loaded (for codename detection)
+HELPERS_LOADED=false
+if type get_supported_codename &>/dev/null; then
+    HELPERS_LOADED=true
+fi
+
+###################################################################################
+# Codename Detection (inline fallback if helpers not loaded)                      #
+###################################################################################
+
+get_openresty_codename() {
+    # If helpers loaded, use the proper function
+    if [[ "$HELPERS_LOADED" == true ]]; then
+        get_supported_codename openresty
+        return
+    fi
+    
+    # Inline fallback implementation
+    local detected override_val
+    
+    # Check for env override first
+    override_val="${OPENRESTY_DIST:-}"
+    if [[ -n "$override_val" ]]; then
+        echo "$override_val"
+        return 0
+    fi
+    
+    # Detect codename
+    if [[ -f /etc/os-release ]]; then
+        # shellcheck disable=SC1091
+        . /etc/os-release
+        detected="${VERSION_CODENAME:-}"
+    fi
+    [[ -z "$detected" ]] && detected="$(lsb_release -cs 2>/dev/null || echo "unknown")"
+    
+    # Check if supported, fallback if not
+    case "$detected" in
+        bookworm|bullseye)
+            echo "$detected"
+            ;;
+        *)
+            log WARN "'$detected' may not be in OpenResty repo, using bookworm"
+            log WARN "Override with OPENRESTY_DIST=<codename>"
+            echo "bookworm"
+            ;;
+    esac
+}
 
 # Set up logging
 readonly LOG_DIR="/var/log/lab"
@@ -208,14 +258,19 @@ setup_certbot() {
 install_openresty() {
     log STEP "Installing OpenResty"
     
+    # Get appropriate codename for OpenResty repo
+    local codename
+    codename="$(get_openresty_codename)"
+    log INFO "Using Debian codename for OpenResty repo: $codename"
+    
     print_subheader "Adding OpenResty repository..."
     curl -fsSL "https://openresty.org/package/pubkey.gpg" \
         | gpg --dearmor -o /etc/apt/trusted.gpg.d/openresty.gpg 2>>"$LOG_FILE"
     
-    cat <<'EOF' >/etc/apt/sources.list.d/openresty.sources
+    cat >/etc/apt/sources.list.d/openresty.sources <<EOF
 Types: deb
 URIs: http://openresty.org/package/debian/
-Suites: bookworm
+Suites: ${codename}
 Components: openresty
 Signed-By: /etc/apt/trusted.gpg.d/openresty.gpg
 EOF

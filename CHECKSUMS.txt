@@ -7,19 +7,20 @@
 # Verify with: sha256sum -c CHECKSUMS.txt
 
 # Libraries
-685d01f33ba356bf3d51e53df30bdca7706b7eb835a1bd17449e19b5fa423634  lib/formatting.sh
+070ab30f8e7f52c3bc0ecc594065971165720bf5ca6660e5c97693294a89df65  lib/formatting.sh
+51917bbc95e2bbb617a5e42fa788ae3d5598c8f4b45191d0c2d4ecfe5e35c763  lib/helpers.sh
 
 # Server Scripts
-8989706e5d705f4ed56f3eb6d14805a2439ecd8a82af0af8f3e6d8b7d105dffb  server/hardening.sh
-a7af5480f2556a5dc496ce70ed6a98494d4b2ef9d9c888b65ddf3cded804c029  server/jump.sh
+c418fc6575169f78dbf851bb34accdda12de25c3f179c446b291b464e46ba31e  server/hardening.sh
+d697ff58ea4626fcafba6a8d5168cb3b2f57400265645e6051bb5838073c2305  server/jump.sh
 
 # PVE Scripts
 885a5a2d75eb31d151fb81f4911e4883af553f560f3abf655219ef5fae8ec0a7  pve/deblxc.sh
 40581c88d7d699601d3303fd864130f0b889b7d7dc4cc97f29541e26232a1ec1  pve/debvm.sh
 
 # Application Scripts
-468ac5aab65c5b3c193948fcb92d13c0000f419411dbe2893731d2bb89c59f17  apps/docker.sh
-8d4e6e3f7530aa4f156c74d421bd02e81bfbcd752de9fd24d6d71127d96589de  apps/npm.sh
+9167c4b88f532a0675dee4113df3764fe1f2efa36a2732da913f6b6b47778676  apps/docker.sh
+66e5812580d8da9b99c3a7dba215f931bef61d88cb83d283ac0517250845b6d8  apps/npm.sh
 461ad40c3287f760fa9b1b8703108e39a9e8db4a2d73d3c8b8902ed64076ddf4  apps/samba.sh
 89807e91e00564bf364f38d6a985b5db7a30af3f18a648244a8d8bf1069c70e9  apps/unbound.sh
 

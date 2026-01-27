@@ -7,12 +7,12 @@
 # Compatible with: Debian 12/13 (VM/LXC)                                    #
 #############################################################################
 
-readonly VERSION="3.2.0"
+readonly SCRIPT_VERSION="3.2.0"
 
 # Handle --help flag early (before sourcing libraries)
 case "${1:-}" in
     --help|-h)
-        echo "Samba File Server Installer v${VERSION}"
+        echo "Samba File Server Installer v${SCRIPT_VERSION}"
         echo
         echo "Usage: $0 [--help]"
         echo
@@ -582,7 +582,7 @@ create_user_interactive() {
 main() {
     clear
     
-    echo -e "\n━━━ Samba File Server Installer v${VERSION} ━━━\n"
+    echo -e "\n━━━ Samba File Server Installer v${SCRIPT_VERSION} ━━━\n"
     
     setup_logging
     preflight_checks

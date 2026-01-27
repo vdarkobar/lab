@@ -28,7 +28,7 @@ chmod +x bootstrap.sh
     ├── 1) <a href="https://github.com/vdarkobar/lab/tree/main/misc/DebianVMTemplate.md">Debian VM Template</a>
     ├── 2) <a href="https://github.com/vdarkobar/lab/tree/main/misc/DebianLXCTemplate.md">Debian LXC Template</a>
     ├── 3) <a href="https://github.com/vdarkobar/lab/tree/main/misc/HardenDebianSystem.md">Harden Debian System</a> ──┐
-    ├── 4) <a href="https://github.com/vdarkobar/lab/tree/main/misc/JumpServer.md">Jump Server</a>             │
+    ├── 4) <a href="https://github.com/vdarkobar/lab/tree/main/misc/JumpServer.md">Jump Server</a>            │
     └── 5) Exit                   │
                                   ▼
                              App Menu

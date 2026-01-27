@@ -19,36 +19,34 @@ case "${1:-}" in
         echo "Installation:"
         echo "  bootstrap.sh → hardening.sh → Select \"Samba File Server\""
         echo
-        echo "Environment variables:"
-        echo "  SHARE_NAME        Share name (default: Share)"
-        echo "  SHARE_PATH        Filesystem path (default: /srv/samba/\$SHARE_NAME)"
-        echo "  SAMBA_GROUP       Linux group (default: sambashare)"
+        echo "Interactive mode (default):"
+        echo "  Prompts for share name, path, group, workgroup, and user creation"
+        echo
+        echo "Environment variables (for non-interactive/automation):"
+        echo "  SHARE_NAME        Share name (e.g., \"Data\")"
+        echo "  SHARE_PATH        Filesystem path (e.g., \"/srv/samba/Data\")"
+        echo "  SAMBA_GROUP       Linux group (e.g., \"sambashare\")"
         echo "  WORKGROUP         SMB workgroup (default: WORKGROUP)"
         echo "  SERVER_NAME       NetBIOS name (default: FILESERVER)"
         echo "  MIN_PROTOCOL      Minimum SMB version (default: SMB3)"
         echo "  ENABLE_NETBIOS    Enable NetBIOS/nmbd (default: false)"
         echo "  SKIP_FIREWALL     Skip UFW configuration (default: false)"
-        echo "  QUIET_MODE        Minimal output (default: false)"
-        echo "  CREATE_SAMBA_USER Interactive user creation (default: false)"
+        echo "  QUIET_MODE        No prompts, minimal output (default: false)"
         echo
         echo "Examples:"
-        echo "  $0                                    # Basic install"
-        echo "  SHARE_NAME=Data WORKGROUP=OFFICE $0  # Custom share"
-        echo "  CREATE_SAMBA_USER=true $0            # With user creation"
-        echo
-        echo "Post-install - Create users:"
-        echo "  sudo useradd -M -s /usr/sbin/nologin -G sambashare alice"
-        echo "  sudo smbpasswd -a alice"
-        echo "  sudo smbpasswd -e alice"
+        echo "  $0                                    # Interactive install"
+        echo "  SHARE_NAME=Data SAMBA_GROUP=team \\"
+        echo "  QUIET_MODE=true $0                   # Automated install"
         echo
         echo "Access:"
-        echo "  Windows:  \\\\<server-ip>\\Share"
-        echo "  Linux:    smb://<server-ip>/Share"
+        echo "  Windows:  \\\\<server-ip>\\<share>"
+        echo "  Linux:    smb://<server-ip>/<share>"
         echo
         echo "Files created:"
         echo "  /etc/samba/smb.conf       Samba configuration"
         echo "  /srv/samba/<share>        Share directory"
         echo "  /var/log/samba/           Log files"
+        echo "  /var/log/lab/samba.log    Installation log"
         exit 0
         ;;
 esac
@@ -87,16 +85,16 @@ fi
 # Configuration                                                             #
 #############################################################################
 
-SHARE_NAME="${SHARE_NAME:-Share}"
-SHARE_PATH="${SHARE_PATH:-/srv/samba/${SHARE_NAME}}"
-SAMBA_GROUP="${SAMBA_GROUP:-sambashare}"
+# Defaults (can be overridden by environment variables)
+SHARE_NAME="${SHARE_NAME:-}"
+SHARE_PATH="${SHARE_PATH:-}"
+SAMBA_GROUP="${SAMBA_GROUP:-}"
 WORKGROUP="${WORKGROUP:-WORKGROUP}"
 SERVER_NAME="${SERVER_NAME:-FILESERVER}"
 MIN_PROTOCOL="${MIN_PROTOCOL:-SMB3}"
 ENABLE_NETBIOS="${ENABLE_NETBIOS:-false}"
 SKIP_FIREWALL="${SKIP_FIREWALL:-false}"
 QUIET_MODE="${QUIET_MODE:-false}"
-CREATE_SAMBA_USER="${CREATE_SAMBA_USER:-false}"
 
 # Security settings
 readonly SERVER_SIGNING="auto"
@@ -105,6 +103,57 @@ readonly SMB_ENCRYPTION="desired"
 # Logging
 readonly LOG_DIR="/var/log/lab"
 readonly LOG_FILE="$LOG_DIR/samba.log"
+
+#############################################################################
+# Interactive Configuration                                                 #
+#############################################################################
+
+configure_interactive() {
+    print_header "Share Configuration"
+    
+    # Share name
+    if [[ -z "$SHARE_NAME" ]]; then
+        echo
+        print_info "Enter the name for your SMB share (visible to clients)"
+        echo -ne "Share name [default: Share]: "
+        read -r input
+        SHARE_NAME="${input:-Share}"
+    fi
+    print_success "Share name: $SHARE_NAME"
+    
+    # Share path
+    if [[ -z "$SHARE_PATH" ]]; then
+        local default_path="/srv/samba/${SHARE_NAME}"
+        echo
+        print_info "Enter the filesystem path for the share"
+        echo -ne "Share path [default: $default_path]: "
+        read -r input
+        SHARE_PATH="${input:-$default_path}"
+    fi
+    print_success "Share path: $SHARE_PATH"
+    
+    # Samba group
+    if [[ -z "$SAMBA_GROUP" ]]; then
+        echo
+        print_info "Enter the Linux group that will have access to the share"
+        echo -ne "Group name [default: sambashare]: "
+        read -r input
+        SAMBA_GROUP="${input:-sambashare}"
+    fi
+    print_success "Group: $SAMBA_GROUP"
+    
+    # Workgroup
+    if [[ "$WORKGROUP" == "WORKGROUP" ]]; then
+        echo
+        print_info "Enter the SMB workgroup name (should match your network)"
+        echo -ne "Workgroup [default: WORKGROUP]: "
+        read -r input
+        WORKGROUP="${input:-WORKGROUP}"
+    fi
+    print_success "Workgroup: $WORKGROUP"
+    
+    echo
+}
 
 #############################################################################
 # Logging Functions                                                         #
@@ -524,33 +573,62 @@ show_summary() {
 #############################################################################
 
 create_user_interactive() {
-    if [[ "$CREATE_SAMBA_USER" != "true" ]] || [[ "$QUIET_MODE" == "true" ]]; then
+    if [[ "$QUIET_MODE" == "true" ]]; then
         return 0
     fi
     
-    print_header "Interactive User Creation"
+    print_header "Samba User Creation"
+    
+    echo
+    print_info "Samba requires separate user accounts for authentication."
+    print_info "Users must be added to the '$SAMBA_GROUP' group to access the share."
+    echo
+    
+    while true; do
+        echo -ne "Create a Samba user now? (yes/no) [default: yes]: "
+        read -r response
+        response="${response:-yes}"
+        
+        case "${response,,}" in
+            yes|y)
+                break
+                ;;
+            no|n)
+                print_info "Skipping user creation"
+                print_warning "Remember to create users later:"
+                echo "  sudo useradd -M -s /usr/sbin/nologin -G $SAMBA_GROUP <username>"
+                echo "  sudo smbpasswd -a <username>"
+                echo "  sudo smbpasswd -e <username>"
+                return 0
+                ;;
+            *)
+                print_error "Please answer yes or no"
+                ;;
+        esac
+    done
     
     while true; do
         echo
-        echo -ne "Create a Samba user (or press Enter to skip): "
+        echo -ne "Username: "
         read -r username
         
         if [[ -z "$username" ]]; then
-            print_info "Skipping user creation"
-            break
+            print_error "Username cannot be empty"
+            continue
         fi
         
         # Validate username
         if [[ ! "$username" =~ ^[a-z_][a-z0-9_-]*$ ]]; then
-            print_error "Invalid username format"
+            print_error "Invalid username format (lowercase letters, numbers, underscore, dash)"
             continue
         fi
         
         if id "$username" &>/dev/null; then
-            print_error "User '$username' already exists"
+            print_error "User '$username' already exists in the system"
             continue
         fi
         
+        # Create system user
         print_step "Creating system user: $username"
         if sudo useradd -M -s /usr/sbin/nologin -G "$SAMBA_GROUP" "$username"; then
             print_success "System user created"
@@ -559,20 +637,27 @@ create_user_interactive() {
             continue
         fi
         
+        # Set Samba password
         print_step "Setting Samba password for: $username"
+        echo
         if sudo smbpasswd -a "$username"; then
             sudo smbpasswd -e "$username"
-            print_success "User '$username' created successfully"
+            print_success "User '$username' created and enabled"
         else
             print_error "Failed to set Samba password"
         fi
         
-        echo -ne "Create another user? (y/N): "
+        echo
+        echo -ne "Create another user? (yes/no) [default: no]: "
         read -r create_another
-        if [[ ! "$create_another" =~ ^[Yy]$ ]]; then
+        create_another="${create_another:-no}"
+        
+        if [[ ! "${create_another,,}" =~ ^(yes|y)$ ]]; then
             break
         fi
     done
+    
+    echo
 }
 
 #############################################################################
@@ -586,6 +671,7 @@ main() {
     
     setup_logging
     preflight_checks
+    configure_interactive
     install_packages
     create_share_directory
     generate_config

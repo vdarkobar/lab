@@ -627,7 +627,8 @@ setup_google_authenticator() {
     # -t: time-based tokens
     # -r 3 -R 30: rate limit (3 attempts per 30 seconds)
     # -W: show warmup codes
-    google-authenticator -d -f -t -r 3 -R 30 -W
+    # Note: must use /dev/tty for QR code to render (bypasses tee logging)
+    google-authenticator -d -f -t -r 3 -R 30 -W </dev/tty >/dev/tty
     
     print_success "Google Authenticator configured"
     echo
@@ -703,6 +704,7 @@ prompt_reboot() {
                 sudo apt-get clean -qq
                 sudo apt-get autoremove -qq -y
                 sudo reboot now
+                break
                 ;;
             no|n)
                 print_warning "Remember to restart later!"

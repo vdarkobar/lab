@@ -11,7 +11,7 @@
 
 # Server Scripts
 e7fe6c36153ccb5d21e46dd3e55ba87e936287dd92faf9004bfaf61c1189259b  server/hardening.sh
-01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b  server/jump.sh
+a7af5480f2556a5dc496ce70ed6a98494d4b2ef9d9c888b65ddf3cded804c029  server/jump.sh
 
 # PVE Scripts
 885a5a2d75eb31d151fb81f4911e4883af553f560f3abf655219ef5fae8ec0a7  pve/deblxc.sh

@@ -39,6 +39,7 @@ bootstrap.sh
                              ├── 2) Nginx Proxy Manager
                              ├── 3) Portainer
                              ├── 4) Unbound DNS ──┐
+                             ├── 5) Samba File Server
                              └── N) Done          │
                                                   ▼
                                              Config Menu

@@ -671,7 +671,7 @@ EOF
 }
 
 #################################################################
-# Main Function                                                  #
+# Main Function                                                 #
 #################################################################
 
 main() {
@@ -717,5 +717,44 @@ main() {
     log "Template creation completed successfully: ID=$CONTAINER_ID"
 }
 
-# Run main
-main "$@"
+# Argument handling
+case "${1:-}" in
+    --help|-h)
+        echo "Debian LXC Template Creator v${VERSION}"
+        echo
+        echo "Usage: $0 [--help]"
+        echo
+        echo "Installation:"
+        echo "  bootstrap.sh → Select \"Create Debian LXC Template\""
+        echo
+        echo "Environment variables (for non-interactive mode):"
+        echo "  DEBLXC_TEMPLATE_STORAGE   Storage for templates (e.g., \"local\")"
+        echo "  DEBLXC_ROOTFS_STORAGE     Storage for rootfs (e.g., \"local-lvm\")"
+        echo "  DEBLXC_CONTAINER_ID       Container ID (e.g., \"9000\")"
+        echo "  DEBLXC_HOSTNAME           Hostname (default: deblxc)"
+        echo "  DEBLXC_USERNAME           Non-root username"
+        echo "  DEBLXC_PASSWORD           User password"
+        echo "  DEBLXC_BRIDGE             Network bridge (default: vmbr0)"
+        echo "  DEBLXC_CORES              CPU cores (default: 4)"
+        echo "  DEBLXC_MEMORY             Memory in MB (default: 4096)"
+        echo "  DEBLXC_DISK               Disk size in GB (default: 8)"
+        echo
+        echo "Example (fully automated):"
+        echo "  DEBLXC_TEMPLATE_STORAGE=local \\"
+        echo "  DEBLXC_ROOTFS_STORAGE=local-lvm \\"
+        echo "  DEBLXC_CONTAINER_ID=9000 \\"
+        echo "  DEBLXC_HOSTNAME=debian-tpl \\"
+        echo "  DEBLXC_USERNAME=admin \\"
+        echo "  DEBLXC_PASSWORD='SecurePass1!' \\"
+        echo "  DEBLXC_BRIDGE=vmbr0 \\"
+        echo "  $0"
+        echo
+        echo "Files created:"
+        echo "  /etc/pve/lxc/<id>.conf    Container/template config"
+        echo "  /var/log/lab/deblxc.log   Installation log"
+        exit 0
+        ;;
+    *)
+        main "$@"
+        ;;
+esac

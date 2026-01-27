@@ -1318,6 +1318,9 @@ case "${1:-}" in
         echo
         echo "Usage: $0 [OPTION]"
         echo
+        echo "Installation:"
+        echo "  bootstrap.sh → hardening.sh → Select \"Unbound DNS\""
+        echo
         echo "Options:"
         echo "  (none)        Full installation"
         echo "  --configure   Run configuration menu (VLANs, hosts)"
@@ -1325,10 +1328,21 @@ case "${1:-}" in
         echo "  --hosts       Configure static DNS hosts only"
         echo "  --help        Show this help"
         echo
+        echo "Environment variables (for non-interactive mode):"
+        echo "  UNBOUND_DOMAIN        Local domain name (default: from resolv.conf)"
+        echo "  UNBOUND_SKIP_REBOOT   Set to \"true\" to skip reboot prompt"
+        echo
         echo "Examples:"
-        echo "  $0              # Fresh install"
-        echo "  $0 --hosts      # Add/update static DNS records"
-        echo "  $0 --vlans      # Add/update allowed subnets"
+        echo "  $0                        # Fresh install"
+        echo "  $0 --hosts                # Add/update static DNS records"
+        echo "  $0 --vlans                # Add/update allowed subnets"
+        echo "  UNBOUND_DOMAIN=home.local UNBOUND_SKIP_REBOOT=true $0"
+        echo
+        echo "Files created:"
+        echo "  /etc/unbound/unbound.conf                      Main config"
+        echo "  /etc/unbound/unbound.conf.d/vlans.conf         VLAN access control"
+        echo "  /etc/unbound/unbound.conf.d/30-static-hosts.conf  Static DNS records"
+        echo "  /var/log/lab/unbound.log                       Installation log"
         ;;
     *)
         main "$@"

@@ -125,7 +125,7 @@ configure_interactive() {
     if [[ -z "$SHARE_PATH" ]]; then
         local default_path="/srv/samba/${SHARE_NAME}"
         echo
-        print_info "Enter the filesystem path for the share"
+        print_info "Enter the directory path on this server where shared files will be stored"
         echo -ne "Share path [default: $default_path]: "
         read -r input
         SHARE_PATH="${input:-$default_path}"

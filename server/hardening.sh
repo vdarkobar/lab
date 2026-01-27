@@ -4,7 +4,7 @@
 # Debian 13 VM/LXC Server Hardening Script                                  #
 #############################################################################
 
-readonly SCRIPT_VERSION="2.1.0"
+readonly SCRIPT_VERSION="2.2.0"
 
 # Handle --help flag early (before sourcing libraries)
 case "${1:-}" in
@@ -30,10 +30,11 @@ case "${1:-}" in
         echo "  - Offers app installation menu (Docker, NPM, Unbound, etc.)"
         echo
         echo "Files created:"
-        echo "  /var/log/hardening-*.log              Installation log"
-        echo "  /root/hardening-backups-*/            Config backups"
-        echo "  /etc/ssh/sshd_config.d/99-hardening.conf"
-        echo "  /etc/fail2ban/jail.local"
+        echo "  /var/log/hardening-*.log                    Installation log"
+        echo "  /root/hardening-backups-*/                  Config backups"
+        echo "  /etc/ssh/sshd_config.d/99-lab-hardening.conf    SSH hardening"
+        echo "  /etc/fail2ban/jail.d/99-lab-hardening.conf      Fail2Ban config"
+        echo "  /etc/sysctl.d/99-lab-hardening.conf             Sysctl hardening"
         echo
         echo "Available apps (via menu):"
         echo "  - Docker + Compose v2"
@@ -491,29 +492,36 @@ configure_fail2ban() {
         die "Fail2Ban is not installed"
     fi
     
-    # Copy jail.conf to jail.local
-    print_step "Creating Fail2Ban configuration..."
-    if ! sudo cp /etc/fail2ban/jail.conf /etc/fail2ban/jail.local; then
-        die "Failed to create jail.local"
-    fi
+    # Use drop-in config instead of editing jail.local
+    # This survives package upgrades and is fully idempotent
+    local dropin_dir="/etc/fail2ban/jail.d"
+    local dropin_file="${dropin_dir}/99-lab-hardening.conf"
     
-    backup_file "/etc/fail2ban/jail.local"
+    print_step "Creating Fail2Ban drop-in configuration..."
+    sudo mkdir -p "$dropin_dir"
     
-    # Configure backend for systemd
-    sudo sed -i 's|backend = auto|backend = systemd|g' /etc/fail2ban/jail.local
+    # Write drop-in config (overwrites if exists - idempotent)
+    sudo tee "$dropin_file" > /dev/null << 'EOF'
+# Managed by lab/hardening.sh - do not edit manually
+# User customizations belong in jail.local or other jail.d/ files
+
+[DEFAULT]
+# Use systemd backend (fixes Debian bug with auto backend)
+backend = systemd
+
+# Stricter limits: 3 attempts, 15 minute ban
+bantime = 15m
+maxretry = 3
+findtime = 10m
+
+[sshd]
+enabled = true
+EOF
     
-    # Enable SSH protection
-    print_step "Enabling SSH protection..."
-    local config_file="/etc/fail2ban/jail.local"
-    sudo awk '/\[sshd\]/ && ++n == 2 {print; print "enabled = true"; next}1' "$config_file" > /tmp/jail.local.tmp
-    sudo mv /tmp/jail.local.tmp "$config_file"
+    log SUCCESS "Fail2Ban drop-in config created: $dropin_file"
     
-    # Set stricter limits
-    print_step "Configuring ban parameters (3 attempts, 15min ban)..."
-    sudo sed -i 's|bantime  = 10m|bantime  = 15m|g' "$config_file"
-    sudo sed -i 's|maxretry = 5|maxretry = 3|g' "$config_file"
-    
-    # Restart Fail2Ban
+    # Restart Fail2Ban to apply changes
+    print_step "Restarting Fail2Ban service..."
     if sudo systemctl restart fail2ban; then
         log SUCCESS "Fail2Ban configured and running"
     else
@@ -591,15 +599,15 @@ secure_shared_memory() {
 configure_sysctl() {
     print_header "Applying Network Security Settings"
     
-    local sysctl_file="/etc/sysctl.d/99-hardening.conf"
+    local sysctl_file="/etc/sysctl.d/99-lab-hardening.conf"
     
     backup_file "$sysctl_file"
     
-    print_step "Creating sysctl configuration..."
-    # Create sysctl configuration
+    print_step "Creating sysctl drop-in configuration..."
+    # Create sysctl configuration (overwrites if exists - idempotent)
     sudo tee "$sysctl_file" > /dev/null << 'EOF'
-# Network security hardening
-# Applied by server hardening script
+# Managed by lab/hardening.sh - do not edit manually
+# Network security hardening settings
 
 # IP Forwarding (disable unless this is a router)
 net.ipv4.ip_forward = 0
@@ -627,9 +635,11 @@ net.ipv4.tcp_synack_retries = 2
 net.ipv4.tcp_syn_retries = 3
 EOF
 
+    log SUCCESS "Sysctl drop-in config created: $sysctl_file"
+
     # Apply settings (may fail in unprivileged containers)
     print_step "Applying sysctl settings..."
-    if sudo sysctl -p "$sysctl_file" >/dev/null 2>&1; then
+    if sudo sysctl --system >/dev/null 2>&1; then
         log SUCCESS "Network security settings applied"
     else
         print_warning "Some settings failed (expected in unprivileged containers)"
@@ -738,42 +748,55 @@ configure_sshd() {
     print_header "Hardening SSH Configuration"
     
     local sshd_config="/etc/ssh/sshd_config"
+    local dropin_dir="/etc/ssh/sshd_config.d"
+    local dropin_file="${dropin_dir}/99-lab-hardening.conf"
+    local backup="/tmp/sshd_lab_backup_$$"
+    local user=$(whoami)
+    
     backup_file "$sshd_config"
     
-    # Create backup
-    sudo cp "$sshd_config" "${sshd_config}.original"
+    # Ensure drop-in directory exists
+    sudo mkdir -p "$dropin_dir"
     
-    print_step "Applying SSH security settings..."
-    # Apply SSH hardening settings
-    local settings=(
-        "s|^#*PermitRootLogin.*|PermitRootLogin no|"
-        "s|^#*PasswordAuthentication.*|PasswordAuthentication no|"
-        "s|^#*PubkeyAuthentication.*|PubkeyAuthentication yes|"
-        "s|^#*PermitEmptyPasswords.*|PermitEmptyPasswords no|"
-        "s|^#*ChallengeResponseAuthentication.*|ChallengeResponseAuthentication no|"
-        "s|^#*KbdInteractiveAuthentication.*|KbdInteractiveAuthentication no|"
-        "s|^#*UsePAM.*|UsePAM no|"
-        "s|^#*X11Forwarding.*|X11Forwarding no|"
-        "s|^#*MaxAuthTries.*|MaxAuthTries 3|"
-        "s|^#*MaxSessions.*|MaxSessions 2|"
-        "s|^#*LogLevel.*|LogLevel VERBOSE|"
-        "s|^#*StrictModes.*|StrictModes yes|"
-        "s|^#*IgnoreRhosts.*|IgnoreRhosts yes|"
-        "s|^#*GSSAPIAuthentication.*|GSSAPIAuthentication no|"
-    )
-    
-    for setting in "${settings[@]}"; do
-        sudo sed -i "$setting" "$sshd_config"
-    done
-    
-    # Add additional security settings if not present
-    if ! grep -q "^Protocol" "$sshd_config"; then
-        echo "Protocol 2" | sudo tee -a "$sshd_config" > /dev/null
+    # Check if Include directive exists in main config
+    print_step "Checking SSH Include directive..."
+    if ! grep -qE '^[[:space:]]*Include.*/etc/ssh/sshd_config\.d/' "$sshd_config" 2>/dev/null; then
+        print_warning "Adding Include directive to $sshd_config"
+        # Portable prepend: create new file with Include + original content
+        local include_line="Include /etc/ssh/sshd_config.d/*.conf"
+        local tmpfile="${sshd_config}.labtmp"
+        { printf '%s\n' "$include_line"; sudo cat "$sshd_config"; } | sudo tee "$tmpfile" > /dev/null
+        sudo mv "$tmpfile" "$sshd_config"
+    else
+        print_success "Include directive already present"
     fi
     
-    if ! grep -q "^ClientAliveInterval" "$sshd_config"; then
-        print_step "Adding advanced security options..."
-        cat << 'EOF' | sudo tee -a "$sshd_config" > /dev/null
+    # Backup current drop-in if exists
+    [[ -f "$dropin_file" ]] && sudo cp "$dropin_file" "$backup"
+    
+    print_step "Creating SSH hardening drop-in configuration..."
+    
+    # Write drop-in config (overwrites if exists - idempotent)
+    sudo tee "$dropin_file" > /dev/null << EOF
+# Managed by lab/hardening.sh - do not edit manually
+# SSH security hardening settings
+
+# Authentication
+PermitRootLogin no
+PasswordAuthentication no
+PubkeyAuthentication yes
+PermitEmptyPasswords no
+ChallengeResponseAuthentication no
+KbdInteractiveAuthentication no
+UsePAM no
+
+# Security limits
+MaxAuthTries 3
+MaxSessions 2
+X11Forwarding no
+StrictModes yes
+IgnoreRhosts yes
+GSSAPIAuthentication no
 
 # Connection timeouts
 ClientAliveInterval 300
@@ -786,37 +809,63 @@ LoginGraceTime 30
 # Security hardening
 PermitUserEnvironment no
 Compression delayed
+LogLevel VERBOSE
+Protocol 2
 
 # Allowed ciphers and algorithms
 Ciphers chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com,aes256-ctr,aes192-ctr,aes128-ctr
 KexAlgorithms curve25519-sha256@libssh.org,diffie-hellman-group-exchange-sha256
 MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com,hmac-sha2-512,hmac-sha2-256
+
+# Restrict SSH access to current user
+AllowUsers ${user}
 EOF
-    fi
+
+    log SUCCESS "SSH drop-in config created: $dropin_file"
     
-    # Restrict SSH access to current user
-    local user=$(whoami)
-    if ! grep -q "^AllowUsers" "$sshd_config"; then
-        print_step "Restricting SSH access to user: ${C_BOLD}${user}${C_RESET}"
-        echo "AllowUsers $user" | sudo tee -a "$sshd_config" > /dev/null
-    else
-        print_warning "AllowUsers already configured, verify manually"
-    fi
-    
-    # Test SSH configuration
+    # Validate SSH configuration before reload
     print_step "Validating SSH configuration..."
-    if sudo sshd -t; then
-        log SUCCESS "SSH configuration is valid"
-        
-        # Restart SSH service
-        if sudo systemctl restart sshd || sudo systemctl restart ssh; then
-            log SUCCESS "SSH service restarted successfully"
+    if ! sudo sshd -t -f "$sshd_config" 2>/dev/null; then
+        print_error "SSH configuration has errors, rolling back..."
+        if [[ -f "$backup" ]]; then
+            sudo mv "$backup" "$dropin_file"
         else
-            print_warning "Failed to restart SSH service"
+            sudo rm -f "$dropin_file"
+        fi
+        # Reload after rollback
+        sudo systemctl reload ssh 2>/dev/null || sudo systemctl reload sshd 2>/dev/null || true
+        die "SSH configuration validation failed"
+    fi
+    log SUCCESS "SSH configuration is valid"
+    
+    # Reload SSH service
+    print_step "Reloading SSH service..."
+    local svc=""
+    if systemctl list-unit-files ssh.service &>/dev/null; then
+        svc="ssh"
+    elif systemctl list-unit-files sshd.service &>/dev/null; then
+        svc="sshd"
+    fi
+    
+    if [[ -n "$svc" ]] && sudo systemctl reload "$svc"; then
+        sleep 1
+        if systemctl is-active --quiet "$svc"; then
+            log SUCCESS "SSH service reloaded and running"
+        else
+            print_error "SSH service not active after reload, rolling back..."
+            if [[ -f "$backup" ]]; then
+                sudo mv "$backup" "$dropin_file"
+            else
+                sudo rm -f "$dropin_file"
+            fi
+            sudo systemctl reload "$svc" || true
+            die "SSH service failed after reload"
         fi
     else
-        die "SSH configuration has errors, reverting changes"
+        print_warning "Failed to reload SSH service"
     fi
+    
+    rm -f "$backup"
     echo
 }
 

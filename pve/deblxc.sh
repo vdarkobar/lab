@@ -653,7 +653,7 @@ convert_to_template() {
     
     # Add description
     cat <<'EOF' >> "/etc/pve/lxc/${CONTAINER_ID}.conf"
-description: <img src="https://github.com/vdarkobar/cloud/blob/main/misc/debian-logo.png?raw=true" alt="Debian Logo"/><br><details><summary>Click to expand</summary>Debian LXC Template - Created by lab/deblxc.sh</details>
+description: <details><summary>Click to expand</summary>Debian LXC Template - Created by lab/deblxc.sh</details>
 EOF
     
     # Stop and convert

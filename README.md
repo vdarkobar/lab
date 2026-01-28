@@ -36,6 +36,7 @@ chmod +x bootstrap.sh
                              ├── 2) <a href="https://github.com/vdarkobar/lab/tree/main/misc/NginxProxyManager.md">Nginx Proxy Manager</a>
                              ├── 3) <a href="https://github.com/vdarkobar/lab/tree/main/misc/UnboundDNS.md">Unbound DNS</a> ──┐
                              ├── 4) <a href="https://github.com/vdarkobar/lab/tree/main/misc/SambaFileServer.md">Samba File Server</a>
+                             ├── 5) <a href="https://github.com/vdarkobar/lab/tree/main/misc/BookStack.md">BookStack</a>     │
                              └── N) Done          │
                                                   ▼
                                              Config Menu

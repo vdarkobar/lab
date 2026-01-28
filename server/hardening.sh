@@ -839,8 +839,8 @@ EOF
     fi
     log SUCCESS "SSH configuration is valid"
     
-    # Reload SSH service
-    print_step "Reloading SSH service..."
+    # Restart SSH service (reload often fails with config changes)
+    print_step "Restarting SSH service..."
     local svc=""
     if systemctl list-unit-files ssh.service &>/dev/null; then
         svc="ssh"
@@ -848,22 +848,22 @@ EOF
         svc="sshd"
     fi
     
-    if [[ -n "$svc" ]] && sudo systemctl reload "$svc"; then
+    if [[ -n "$svc" ]] && sudo systemctl restart "$svc"; then
         sleep 1
         if systemctl is-active --quiet "$svc"; then
-            log SUCCESS "SSH service reloaded and running"
+            log SUCCESS "SSH service restarted and running"
         else
-            print_error "SSH service not active after reload, rolling back..."
+            print_error "SSH service not active after restart, rolling back..."
             if [[ -f "$backup" ]]; then
                 sudo mv "$backup" "$dropin_file"
             else
                 sudo rm -f "$dropin_file"
             fi
-            sudo systemctl reload "$svc" || true
-            die "SSH service failed after reload"
+            sudo systemctl restart "$svc" || true
+            die "SSH service failed after restart"
         fi
     else
-        print_warning "Failed to reload SSH service"
+        print_warning "Failed to restart SSH service"
     fi
     
     rm -f "$backup"

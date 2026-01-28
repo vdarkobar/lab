@@ -290,16 +290,17 @@ ensure_sshd_include() {
     return 0
 }
 
-# reload_sshd
+# restart_sshd
 #
-# Reloads SSH service (portable across Debian/others where service name varies).
-# Verifies service is active after reload.
+# Restarts SSH service (portable across Debian/others where service name varies).
+# Verifies service is active after restart.
+# Note: reload often fails with significant config changes, so we use restart.
 #
 # Returns:
-#   0 = reload successful, service running
+#   0 = restart successful, service running
 #   1 = failure
 
-reload_sshd() {
+restart_sshd() {
     local svc
 
     # Determine service name (ssh on Debian, sshd elsewhere)
@@ -312,18 +313,18 @@ reload_sshd() {
         return 1
     fi
 
-    if ! systemctl reload "$svc"; then
-        echo "ERROR: Failed to reload $svc" >&2
+    if ! systemctl restart "$svc"; then
+        echo "ERROR: Failed to restart $svc" >&2
         return 1
     fi
 
     sleep 1
 
     if systemctl is-active --quiet "$svc"; then
-        echo "SSH service reloaded and running"
+        echo "SSH service restarted and running"
         return 0
     else
-        echo "ERROR: $svc not active after reload" >&2
+        echo "ERROR: $svc not active after restart" >&2
         return 1
     fi
 }
@@ -374,12 +375,12 @@ EOF
             rm -f "$config_file"
         fi
         # Reload after rollback to restore previous state
-        reload_sshd || true
+        restart_sshd || true
         return 1
     fi
 
     # Reload service
-    if ! reload_sshd; then
+    if ! restart_sshd; then
         echo "ERROR: SSH reload failed, rolling back" >&2
         if [[ -f "$backup" ]]; then
             mv "$backup" "$config_file"
@@ -387,7 +388,7 @@ EOF
             rm -f "$config_file"
         fi
         # Reload after rollback
-        reload_sshd || true
+        restart_sshd || true
         return 1
     fi
 
@@ -494,7 +495,7 @@ export -f ensure_line
 export -f ensure_kv
 export -f get_supported_codename
 export -f ensure_sshd_include
-export -f reload_sshd
+export -f restart_sshd
 export -f apply_ssh_hardening
 export -f apply_fail2ban_config
 export -f apply_sysctl_hardening

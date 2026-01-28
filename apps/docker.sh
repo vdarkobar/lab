@@ -90,9 +90,9 @@ get_docker_codename() {
         return 0
     fi
     
-    # Detect codename (use subshell to avoid variable conflicts with readonly VERSION)
+    # Detect codename - use grep to avoid variable conflicts (readonly VERSION)
     if [[ -f /etc/os-release ]]; then
-        detected="$(. /etc/os-release && echo "${VERSION_CODENAME:-}")"
+        detected="$(grep '^VERSION_CODENAME=' /etc/os-release 2>/dev/null | cut -d= -f2 | tr -d '"')"
     fi
     [[ -z "$detected" ]] && detected="$(lsb_release -cs 2>/dev/null || echo "unknown")"
     

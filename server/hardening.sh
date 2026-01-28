@@ -202,8 +202,13 @@ detect_environment() {
             IS_CONTAINER=true
             IS_PRIVILEGED=false
             
-            # Check if privileged container
-            if [[ -c /dev/kmsg ]] || [[ -w /sys/kernel ]]; then
+            # Check if privileged container using multiple indicators
+            # Different container runtimes expose different capabilities
+            if [[ -c /dev/kmsg ]] || \
+               [[ -w /sys/kernel ]] || \
+               [[ -e /dev/net/tun ]] || \
+               capsh --print 2>/dev/null | grep -q 'cap_sys_admin' || \
+               [[ -w /proc/sys/net ]]; then
                 IS_PRIVILEGED=true
             fi
         elif systemd-detect-virt --vm >/dev/null 2>&1; then
@@ -537,17 +542,21 @@ EOF
 configure_ufw() {
     print_header "Configuring UFW Firewall"
     
-    # Check if UFW can work in this environment
-    if [[ "$IS_CONTAINER" == "true" ]] && [[ "$IS_PRIVILEGED" == "false" ]]; then
-        print_warning "UFW not supported in unprivileged containers"
-        print_info "Configure firewall on the host system instead"
+    # Test if UFW can actually work by trying to reset it
+    # This is more reliable than checking container privilege indicators
+    print_step "Testing UFW availability..."
+    if ! sudo ufw --force reset >/dev/null 2>&1; then
+        # Check if it's a permission/capability issue
+        if [[ "$IS_CONTAINER" == "true" ]]; then
+            print_warning "UFW not functional in this container (missing capabilities)"
+            print_info "Configure firewall on the Proxmox host instead"
+        else
+            print_warning "UFW reset failed - firewall may need manual configuration"
+        fi
         echo
         return
     fi
-    
-    # Reset UFW to default state
-    print_step "Resetting UFW to defaults..."
-    sudo ufw --force reset >/dev/null 2>&1 || true
+    print_success "UFW is functional"
     
     # Set default policies
     print_step "Setting default policies..."

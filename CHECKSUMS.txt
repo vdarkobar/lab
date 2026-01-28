@@ -8,10 +8,10 @@
 
 # Libraries
 070ab30f8e7f52c3bc0ecc594065971165720bf5ca6660e5c97693294a89df65  lib/formatting.sh
-51917bbc95e2bbb617a5e42fa788ae3d5598c8f4b45191d0c2d4ecfe5e35c763  lib/helpers.sh
+b07359f7ee44d8d297f709f47b13faf51949c8e6b92c973fe1d0d4fa1300f511  lib/helpers.sh
 
 # Server Scripts
-04182067aadd3132e1bfaed319fd87840224ec4fb47f6d9eace303860e89115b  server/hardening.sh
+1e4fa92a4cb349cfc62295e811875ae8a751e1faf8f791113d5c7052757961b2  server/hardening.sh
 ea8630d71dea83c8c2e6fc6270ee91a515dcd04208e8eb9eaa4308798cad0ca4  server/jump.sh
 
 # PVE Scripts

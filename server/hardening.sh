@@ -39,8 +39,9 @@ case "${1:-}" in
         echo "Available apps (via menu):"
         echo "  - Docker + Compose v2"
         echo "  - Nginx Proxy Manager"
-        echo "  - Portainer"
         echo "  - Unbound DNS"
+        echo "  - Samba File Server"
+        echo "  - BookStack Wiki"
         exit 0
         ;;
 esac
@@ -89,6 +90,7 @@ readonly APP_REGISTRY=(
     "Nginx Proxy Manager|npm.sh|systemctl is-active --quiet openresty || systemctl is-active --quiet nginx-proxy-manager"
     "Unbound DNS|unbound.sh|systemctl is-active --quiet unbound"
     "Samba File Server|samba.sh|systemctl is-active --quiet smbd"
+    "BookStack Wiki|bookstack.sh|[[ -f /etc/apache2/sites-enabled/bookstack.conf ]] && [[ -d /opt/bookstack ]]"
     # Add more apps here - one per line
     # "App Name|script.sh|detection command that returns 0 if installed"
 )

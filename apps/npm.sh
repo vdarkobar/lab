@@ -224,6 +224,23 @@ trap cleanup EXIT INT TERM
 install_base_packages() {
     log STEP "Installing base packages"
     
+    # Stop unattended upgrades if running (it holds apt lock)
+    print_subheader "Stopping unattended-upgrades if running..."
+    systemctl stop unattended-upgrades 2>/dev/null || true
+    
+    # Wait for any existing apt processes to finish
+    local wait_count=0
+    while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
+        if [[ $wait_count -eq 0 ]]; then
+            print_subheader "Waiting for apt lock to be released..."
+        fi
+        sleep 2
+        ((wait_count++))
+        if [[ $wait_count -gt 30 ]]; then
+            die "Timed out waiting for apt lock"
+        fi
+    done
+    
     print_subheader "Updating package lists..."
     apt-get update -y >>"$LOG_FILE" 2>&1 || die "apt-get update failed"
     

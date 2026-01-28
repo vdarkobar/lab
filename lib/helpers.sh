@@ -184,10 +184,11 @@ get_supported_codename() {
     local repo_type="$1"
     local detected override_var override_val os_id
 
-    # Detect current codename from os-release (use subshell to avoid variable conflicts)
+    # Detect current codename from os-release
+    # Use grep instead of sourcing to avoid variable conflicts (e.g., readonly VERSION)
     if [[ -f /etc/os-release ]]; then
-        detected="$(. /etc/os-release && echo "${VERSION_CODENAME:-}")"
-        os_id="$(. /etc/os-release && echo "${ID:-}")"
+        detected="$(grep '^VERSION_CODENAME=' /etc/os-release 2>/dev/null | cut -d= -f2 | tr -d '"')"
+        os_id="$(grep '^ID=' /etc/os-release 2>/dev/null | cut -d= -f2 | tr -d '"')"
     fi
 
     # Fallback to lsb_release if os-release didn't have codename

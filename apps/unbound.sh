@@ -761,7 +761,7 @@ configure_vlans() {
         fi
         
         vlans_raw+="$line"$'\n'
-        ((count++))
+        ((count++)) || true
         print_success "Added: $line"
     done
     
@@ -1031,7 +1031,7 @@ configure_static_hosts() {
         fi
         
         hosts_raw+="$ip	$hostname"$'\n'
-        ((count++))
+        ((count++)) || true
         print_success "Added: $ip -> $hostname"
     done
     

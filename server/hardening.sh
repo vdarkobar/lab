@@ -778,6 +778,7 @@ configure_sshd() {
     print_step "Creating SSH hardening drop-in configuration..."
     
     # Write drop-in config (overwrites if exists - idempotent)
+    # Note: Removed deprecated options: Protocol 2, ChallengeResponseAuthentication, Compression delayed
     sudo tee "$dropin_file" > /dev/null << EOF
 # Managed by lab/hardening.sh - do not edit manually
 # SSH security hardening settings
@@ -787,7 +788,6 @@ PermitRootLogin no
 PasswordAuthentication no
 PubkeyAuthentication yes
 PermitEmptyPasswords no
-ChallengeResponseAuthentication no
 KbdInteractiveAuthentication no
 UsePAM no
 
@@ -809,13 +809,11 @@ LoginGraceTime 30
 
 # Security hardening
 PermitUserEnvironment no
-Compression delayed
 LogLevel VERBOSE
-Protocol 2
 
 # Allowed ciphers and algorithms
 Ciphers chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com,aes256-ctr,aes192-ctr,aes128-ctr
-KexAlgorithms curve25519-sha256@libssh.org,diffie-hellman-group-exchange-sha256
+KexAlgorithms curve25519-sha256,curve25519-sha256@libssh.org,diffie-hellman-group-exchange-sha256
 MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com,hmac-sha2-512,hmac-sha2-256
 
 # Restrict SSH access to current user
@@ -824,17 +822,19 @@ EOF
 
     log SUCCESS "SSH drop-in config created: $dropin_file"
     
-    # Validate SSH configuration before reload
+    # Validate SSH configuration before restart
     print_step "Validating SSH configuration..."
-    if ! sudo sshd -t -f "$sshd_config" 2>/dev/null; then
+    local validation_output
+    if ! validation_output=$(sudo sshd -t -f "$sshd_config" 2>&1); then
         print_error "SSH configuration has errors, rolling back..."
+        print_error "Validation error: $validation_output"
         if [[ -f "$backup" ]]; then
             sudo mv "$backup" "$dropin_file"
         else
             sudo rm -f "$dropin_file"
         fi
-        # Reload after rollback
-        sudo systemctl reload ssh 2>/dev/null || sudo systemctl reload sshd 2>/dev/null || true
+        # Restart after rollback
+        sudo systemctl restart ssh 2>/dev/null || sudo systemctl restart sshd 2>/dev/null || true
         die "SSH configuration validation failed"
     fi
     log SUCCESS "SSH configuration is valid"

@@ -225,7 +225,7 @@ get_supported_codename() {
                     ;;
                 *)
                     echo "WARNING: '$detected' may not be in Docker repo, using bookworm" >&2
-                    echo "WARNING: Override with DOCKER_DIST=<codename>" >&2
+                    echo "WARNING: Override with DOCKER_DIST=bookworm (or other supported codename)" >&2
                     echo "bookworm"
                     ;;
             esac
@@ -241,7 +241,7 @@ get_supported_codename() {
                     ;;
                 *)
                     echo "WARNING: '$detected' may not be in OpenResty repo, using bookworm" >&2
-                    echo "WARNING: Override with OPENRESTY_DIST=<codename>" >&2
+                    echo "WARNING: Override with OPENRESTY_DIST=bookworm (or other supported codename)" >&2
                     echo "bookworm"
                     ;;
             esac

@@ -611,16 +611,29 @@ setup_cron() {
 configure_firewall() {
     print_header "Configuring Firewall"
     
-    # Check if UFW is available
+    # Check if UFW is installed
     if ! command -v ufw &>/dev/null; then
-        print_warning "UFW not installed, skipping firewall configuration"
+        print_warning "UFW not installed - skipping firewall configuration"
+        return 0
+    fi
+    
+    # Test if UFW is functional (may fail in unprivileged containers)
+    if ! sudo ufw status >/dev/null 2>&1; then
+        print_warning "UFW not functional (missing capabilities?)"
+        print_info "Configure firewall on the host instead"
+        print_info "Required ports: 53/tcp, 53/udp (DNS)"
+        return 0
+    fi
+    
+    # Check if UFW is active
+    if ! sudo ufw status | grep -q "Status: active"; then
+        print_info "UFW not active - skipping firewall configuration"
         return 0
     fi
     
     local rules=(
         "53/tcp:Unbound-DNS-TCP"
         "53/udp:Unbound-DNS-UDP"
-        "853/tcp:Unbound-DoT"
     )
     
     for rule in "${rules[@]}"; do
@@ -634,10 +647,6 @@ configure_firewall() {
             print_warning "Failed to add rule for $port"
         fi
     done
-    
-    # Reload UFW
-    print_info "Reloading firewall..."
-    sudo systemctl restart ufw 2>/dev/null || true
     
     print_success "Firewall configured"
     log "Firewall rules added"

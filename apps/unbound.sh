@@ -726,40 +726,54 @@ configure_vlans() {
     echo
     draw_separator
     echo
-    print_info "Paste your VLAN subnets below (one per line, CIDR format)."
-    print_info "When finished, press Ctrl+D (or Ctrl+Z then Enter on Windows)."
+    print_info "Format: CIDR notation (e.g., 192.168.1.0/24)"
+    print_info "Enter each subnet and press Enter."
+    print_info "When finished, press Enter on an empty line."
     echo
-    print_info "Format: CIDR notation"
     print_info "Examples:"
-    echo "  192.168.1.0/24      # Main LAN"
-    echo "  192.168.20.0/24     # IoT VLAN"
-    echo "  10.10.0.0/24        # Management VLAN"
+    echo "  192.168.1.0/24      (Main LAN)"
+    echo "  192.168.20.0/24     (IoT VLAN)"
+    echo "  10.10.0.0/24        (Management VLAN)"
     echo
     draw_separator
-    echo
     
-    local vlans_raw
-    vlans_raw="$(cat)" || true
+    local vlans_raw=""
+    local line
+    local count=0
     
-    # Drop empty lines
-    vlans_raw="$(printf '%s\n' "$vlans_raw" | sed -E '/^[[:space:]]*$/d')"
+    while true; do
+        echo -ne "\nSubnet $((count + 1)) (or Enter to finish): "
+        read -r line
+        
+        # Empty line = done
+        [[ -z "$line" ]] && break
+        
+        # Strip comments and whitespace
+        line="$(printf '%s' "$line" | sed -E 's/#.*$//' | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' | awk '{print $1}')"
+        
+        # Skip if empty after stripping
+        [[ -z "$line" ]] && continue
+        
+        # Basic CIDR validation
+        if [[ ! "$line" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+$ ]]; then
+            print_warning "Invalid format: $line (expected: x.x.x.x/xx)"
+            continue
+        fi
+        
+        vlans_raw+="$line"$'\n'
+        ((count++))
+        print_success "Added: $line"
+    done
     
-    if [[ -z "$vlans_raw" ]]; then
+    if [[ -z "$vlans_raw" ]] || [[ $count -eq 0 ]]; then
         echo
         print_warning "No VLANs provided. Skipping VLAN configuration."
         return 0
     fi
     
-    # Normalize whitespace, strip comments, keep first token, sort/unique
+    # Normalize: sort/unique
     local vlans
-    vlans="$(
-        printf '%s\n' "$vlans_raw" |
-        sed -E 's/#.*$//' |
-        sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' |
-        awk '{print $1}' |
-        sed -E '/^[[:space:]]*$/d' |
-        sort -u
-    )"
+    vlans="$(printf '%s' "$vlans_raw" | sed -E '/^[[:space:]]*$/d' | sort -u)"
     
     if [[ -z "$vlans" ]]; then
         echo
@@ -972,26 +986,56 @@ configure_static_hosts() {
     echo
     draw_separator
     echo
-    print_info "Now paste your host entries below (one per line)."
-    print_info "When finished, press Ctrl+D (or Ctrl+Z then Enter on Windows)."
+    print_info "Now enter your host entries (IP and hostname)."
+    print_info "When finished, press Enter on an empty line."
     echo
-    print_info "Format: IP_ADDRESS    HOSTNAME"
+    print_info "Format: IP_ADDRESS  HOSTNAME"
     print_info "Examples:"
     echo "  192.168.1.10    nas"
     echo "  192.168.1.20    proxmox"
     echo "  192.168.1.30    printer"
-    echo "  192.168.20.5    unifi-controller"
     echo
     draw_separator
-    echo
     
-    local hosts_raw
-    hosts_raw="$(cat)" || true
+    local hosts_raw=""
+    local line
+    local count=0
     
-    # Drop empty lines
-    hosts_raw="$(printf '%s\n' "$hosts_raw" | sed -E '/^[[:space:]]*$/d')"
+    while true; do
+        echo -ne "\nHost $((count + 1)) (or Enter to finish): "
+        read -r line
+        
+        # Empty line = done
+        [[ -z "$line" ]] && break
+        
+        # Strip leading/trailing whitespace
+        line="$(printf '%s' "$line" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
+        
+        # Skip if empty after stripping
+        [[ -z "$line" ]] && continue
+        
+        # Basic validation: need at least IP and hostname
+        local ip hostname
+        ip="$(printf '%s' "$line" | awk '{print $1}')"
+        hostname="$(printf '%s' "$line" | awk '{print $2}')"
+        
+        if [[ -z "$ip" ]] || [[ -z "$hostname" ]]; then
+            print_warning "Invalid format: need 'IP HOSTNAME'"
+            continue
+        fi
+        
+        # Basic IP validation
+        if [[ ! "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            print_warning "Invalid IP format: $ip"
+            continue
+        fi
+        
+        hosts_raw+="$ip	$hostname"$'\n'
+        ((count++))
+        print_success "Added: $ip -> $hostname"
+    done
     
-    if [[ -z "$hosts_raw" ]]; then
+    if [[ -z "$hosts_raw" ]] || [[ $count -eq 0 ]]; then
         echo
         print_warning "No hosts provided. Skipping static hosts configuration."
         return 0
@@ -1000,7 +1044,8 @@ configure_static_hosts() {
     # Normalize and sort by IP
     local hosts
     hosts="$(
-        printf '%s\n' "$hosts_raw" |
+        printf '%s' "$hosts_raw" |
+        sed -E '/^[[:space:]]*$/d' |
         awk '
             {
                 ip=$1;

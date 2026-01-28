@@ -520,9 +520,17 @@ configure_firewall() {
         return 0
     fi
     
+    # Test if UFW is functional (may fail in unprivileged containers)
+    if ! ufw status >/dev/null 2>&1; then
+        log WARN "UFW not functional in this environment"
+        log INFO "Configure firewall on the host instead"
+        log INFO "Required ports: 80/tcp, 81/tcp, 443/tcp"
+        return 0
+    fi
+    
     # Check if UFW is active (should be enabled by hardening.sh)
-    if ! ufw status 2>/dev/null | grep -q "Status: active"; then
-        log WARN "UFW not active - run hardening.sh first to enable firewall"
+    if ! ufw status | grep -q "Status: active"; then
+        log WARN "UFW not active - skipping firewall configuration"
         return 0
     fi
     
@@ -543,9 +551,6 @@ configure_firewall() {
             log WARN "Failed to open port ${port}"
         fi
     done
-    
-    print_subheader "Reloading firewall..."
-    ufw reload >>"$LOG_FILE" 2>&1 || true
     
     log SUCCESS "Firewall configured"
 }
@@ -637,7 +642,7 @@ prompt_reboot() {
             yes|y)
                 log INFO "Rebooting system..."
                 reboot
-                break
+                exit 0
                 ;;
             no|n)
                 log INFO "Reboot cancelled"

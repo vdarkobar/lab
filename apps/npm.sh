@@ -514,20 +514,22 @@ EOF
 configure_firewall() {
     log STEP "Configuring firewall"
     
-    # Check if UFW is installed and active
+    # Check if UFW is installed
     if ! command -v ufw >/dev/null 2>&1; then
         log WARN "UFW not installed - skipping firewall configuration"
         return 0
     fi
     
+    # Check if UFW is active (should be enabled by hardening.sh)
     if ! ufw status 2>/dev/null | grep -q "Status: active"; then
-        log WARN "UFW not active - skipping firewall configuration"
+        log WARN "UFW not active - run hardening.sh first to enable firewall"
         return 0
     fi
     
+    # Add NPM-specific port rules
     local ports=(
-        "81/tcp|NPM Admin UI"
         "80/tcp|HTTP Proxy"
+        "81/tcp|NPM Admin UI"
         "443/tcp|HTTPS Proxy"
     )
     
@@ -609,11 +611,9 @@ show_summary() {
     print_kv "Data Directory" "$DATA_DIR (SQLite database)"
     print_kv "Log File" "$LOG_FILE"
     echo
-    print_header "Default Credentials"
-    print_kv "Email" "admin@example.com"
-    print_kv "Password" "changeme"
-    echo
-    print_warning "Change the default password immediately after first login!"
+    print_header "First Login"
+    print_info "On first access, you will be prompted to create an admin account."
+    print_info "Enter your name, email, and password to complete setup."
     echo
 }
 

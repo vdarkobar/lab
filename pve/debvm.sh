@@ -607,6 +607,7 @@ create_proxmox_vm() {
   qm set "$vm_id" --agent enabled=1 --serial0 socket --vga serial0
   qm set "$vm_id" --cpu cputype=host --ostype l26 --ciupgrade 1
   qm set "$vm_id" --balloon 2048
+  qm set "$vm_id" --description '<details><summary>Click to expand</summary>Debian VM Template - Created by lab/debvm.sh</details>'
 
   # NOTE: qm set does NOT support --hostname; hostname comes from cloud-init user-data.
   qm set "$vm_id" --ciuser "$username" --cipassword "$password" --ipconfig0 ip=dhcp

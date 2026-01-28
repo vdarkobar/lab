@@ -121,11 +121,9 @@ get_openresty_codename() {
         return 0
     fi
     
-    # Detect codename
+    # Detect codename (use subshell to avoid variable conflicts)
     if [[ -f /etc/os-release ]]; then
-        # shellcheck disable=SC1091
-        . /etc/os-release
-        detected="${VERSION_CODENAME:-}"
+        detected="$(. /etc/os-release && echo "${VERSION_CODENAME:-}")"
     fi
     [[ -z "$detected" ]] && detected="$(lsb_release -cs 2>/dev/null || echo "unknown")"
     

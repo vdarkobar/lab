@@ -1312,6 +1312,7 @@ prompt_reboot() {
                 print_info "Rebooting the server..."
                 log "User requested reboot"
                 sudo reboot
+                exit 0
                 ;;
             no|n)
                 print_info "Reboot cancelled"

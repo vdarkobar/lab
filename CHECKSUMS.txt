@@ -11,7 +11,7 @@
 2b85d02194c304fc1189e53d8a18b0d9a4eb1595d6b4d5066df14157a55946e0  lib/helpers.sh
 
 # Server Scripts
-7877743002d21f2adaba1043d7cab8027a4a14123eb48fd6b2a9ca3905138611  server/hardening.sh
+771c5dd78ac0e311ef8523f2ea22ecc959969dd98ee59c98e41bec3b66fe2023  server/hardening.sh
 ea8630d71dea83c8c2e6fc6270ee91a515dcd04208e8eb9eaa4308798cad0ca4  server/jump.sh
 
 # PVE Scripts

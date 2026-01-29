@@ -320,15 +320,24 @@ configure_nginx() {
     log STEP "Configuring Nginx for BentoPDF"
     
     # Create nginx config for BentoPDF
-    cat <<EOF >/etc/nginx/sites-available/bentopdf
+    cat <<'EOF' >/etc/nginx/sites-available/bentopdf
 server {
-    listen ${BENTOPDF_PORT};
-    listen [::]:${BENTOPDF_PORT};
+    listen 8080;
+    listen [::]:8080;
     
     server_name _;
     
-    root ${INSTALL_DIR}/dist;
-    index index.html;
+    root /opt/bentopdf/dist;
+    index index.html index.htm;
+    
+    # Include standard MIME types
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+    
+    # Add WASM MIME type
+    types {
+        application/wasm wasm;
+    }
     
     # Gzip compression
     gzip on;
@@ -336,17 +345,12 @@ server {
     gzip_min_length 1024;
     gzip_types text/plain text/css text/xml text/javascript application/javascript application/json application/xml application/wasm;
     
-    # WASM MIME type
-    types {
-        application/wasm wasm;
-    }
-    
     location / {
-        try_files \$uri \$uri/ /index.html;
+        try_files $uri $uri/ /index.html;
     }
     
     # Cache static assets
-    location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$ {
+    location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot|wasm)$ {
         expires 1y;
         add_header Cache-Control "public, immutable";
     }
@@ -358,6 +362,12 @@ server {
     }
 }
 EOF
+
+    # Update port if non-default
+    if [[ "$BENTOPDF_PORT" != "8080" ]]; then
+        sed -i "s/listen 8080/listen ${BENTOPDF_PORT}/g" /etc/nginx/sites-available/bentopdf
+        sed -i "s/listen \[::\]:8080/listen [::]:${BENTOPDF_PORT}/g" /etc/nginx/sites-available/bentopdf
+    fi
     
     # Enable the site
     ln -sf /etc/nginx/sites-available/bentopdf /etc/nginx/sites-enabled/bentopdf
@@ -367,6 +377,7 @@ EOF
     
     # Test nginx config
     if ! nginx -t >>"$LOG_FILE" 2>&1; then
+        cat /etc/nginx/sites-available/bentopdf >> "$LOG_FILE"
         die "Nginx configuration test failed"
     fi
     

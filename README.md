@@ -37,6 +37,7 @@ chmod +x bootstrap.sh
                              ├── 3) <a href="https://github.com/vdarkobar/lab/tree/main/misc/UnboundDNS.md">Unbound DNS</a> ──┐
                              ├── 4) <a href="https://github.com/vdarkobar/lab/tree/main/misc/SambaFileServer.md">Samba File Server</a>
                              ├── 5) <a href="https://github.com/vdarkobar/lab/tree/main/misc/BookStack.md">BookStack</a>     │
+                             ├── 6) <a href="https://github.com/vdarkobar/lab/tree/main/misc/BentoPDF.md">BentoPDF</a>      │
                              └── N) Done          │
                                                   ▼
                                              Config Menu

@@ -125,12 +125,13 @@ check_environment() {
     fi
     
     # Check if BentoPDF already installed
-    if systemctl list-unit-files 2>/dev/null | grep -qE '^bentopdf\.service'; then
-        die "bentopdf.service already exists - BentoPDF may already be installed"
+    if [[ -d "$INSTALL_DIR" ]] && [[ -d "$INSTALL_DIR/dist" ]]; then
+        die "${INSTALL_DIR}/dist already exists - BentoPDF may already be installed"
     fi
     
-    if [[ -d "$INSTALL_DIR" ]] && [[ -f "$INSTALL_DIR/package.json" ]]; then
-        die "${INSTALL_DIR} already populated - BentoPDF may already be installed"
+    # Check if nginx site already configured for bentopdf
+    if [[ -f /etc/nginx/sites-enabled/bentopdf ]]; then
+        die "Nginx site 'bentopdf' already configured"
     fi
     
     log SUCCESS "Environment checks passed"
@@ -289,53 +290,96 @@ build_bentopdf() {
     print_subheader "Installing npm dependencies (this may take a while)..."
     npm ci --no-audit --no-fund >>"$LOG_FILE" 2>&1 || die "Failed to install npm dependencies"
     
-    print_subheader "Building application..."
+    print_subheader "Building application (this may take a while)..."
     export SIMPLE_MODE=true
     npm run build -- --mode production >>"$LOG_FILE" 2>&1 || die "Failed to build BentoPDF"
     
+    # Verify build output
+    if [[ ! -d "${INSTALL_DIR}/dist" ]]; then
+        die "Build failed - dist directory not found"
+    fi
+    
     log SUCCESS "BentoPDF built successfully"
+}
+
+install_nginx() {
+    log STEP "Installing Nginx"
+    
+    if command -v nginx >/dev/null 2>&1; then
+        log SUCCESS "Nginx already installed"
+        return 0
+    fi
+    
+    print_subheader "Installing nginx..."
+    apt-get install -y nginx >>"$LOG_FILE" 2>&1 || die "Failed to install nginx"
+    
+    log SUCCESS "Nginx installed"
+}
+
+configure_nginx() {
+    log STEP "Configuring Nginx for BentoPDF"
+    
+    # Create nginx config for BentoPDF
+    cat <<EOF >/etc/nginx/sites-available/bentopdf
+server {
+    listen ${BENTOPDF_PORT};
+    listen [::]:${BENTOPDF_PORT};
+    
+    server_name _;
+    
+    root ${INSTALL_DIR}/dist;
+    index index.html;
+    
+    # Gzip compression
+    gzip on;
+    gzip_vary on;
+    gzip_min_length 1024;
+    gzip_types text/plain text/css text/xml text/javascript application/javascript application/json application/xml application/wasm;
+    
+    # WASM MIME type
+    types {
+        application/wasm wasm;
+    }
+    
+    location / {
+        try_files \$uri \$uri/ /index.html;
+    }
+    
+    # Cache static assets
+    location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+    }
+    
+    # No cache for HTML
+    location ~* \.html$ {
+        expires -1;
+        add_header Cache-Control "no-store, no-cache, must-revalidate";
+    }
+}
+EOF
+    
+    # Enable the site
+    ln -sf /etc/nginx/sites-available/bentopdf /etc/nginx/sites-enabled/bentopdf
+    
+    # Remove default site if it exists
+    rm -f /etc/nginx/sites-enabled/default
+    
+    # Test nginx config
+    if ! nginx -t >>"$LOG_FILE" 2>&1; then
+        die "Nginx configuration test failed"
+    fi
+    
+    log SUCCESS "Nginx configured"
 }
 
 create_systemd_service() {
     log STEP "Creating systemd service"
     
-    cat <<EOF >/lib/systemd/system/bentopdf.service
-[Unit]
-Description=BentoPDF - Self-hosted PDF Editor
-After=network.target
-
-[Service]
-Type=simple
-Environment=NODE_ENV=production
-Environment=PORT=${BENTOPDF_PORT}
-WorkingDirectory=${INSTALL_DIR}
-ExecStart=/usr/bin/node ${INSTALL_DIR}/server.js
-Restart=on-failure
-RestartSec=5
-
-# Security hardening
-NoNewPrivileges=true
-ProtectSystem=strict
-ProtectHome=true
-ReadWritePaths=${INSTALL_DIR}
-PrivateTmp=true
-
-[Install]
-WantedBy=multi-user.target
-EOF
-    
-    # Check if server.js exists, otherwise try index.js
-    if [[ ! -f "${INSTALL_DIR}/server.js" ]]; then
-        if [[ -f "${INSTALL_DIR}/index.js" ]]; then
-            sed -i "s|server.js|index.js|g" /lib/systemd/system/bentopdf.service
-        elif [[ -f "${INSTALL_DIR}/dist/index.js" ]]; then
-            sed -i "s|${INSTALL_DIR}/server.js|${INSTALL_DIR}/dist/index.js|g" /lib/systemd/system/bentopdf.service
-        fi
-    fi
-    
+    # We'll use nginx's built-in service, just ensure it's enabled
     systemctl daemon-reload >>"$LOG_FILE" 2>&1
     
-    log SUCCESS "Systemd service created"
+    log SUCCESS "Using nginx.service for BentoPDF"
 }
 
 configure_firewall() {
@@ -374,11 +418,12 @@ configure_firewall() {
 start_services() {
     log STEP "Starting services"
     
-    print_subheader "Enabling and starting BentoPDF..."
-    systemctl enable --now bentopdf >>"$LOG_FILE" 2>&1 || die "Failed to start BentoPDF"
+    print_subheader "Enabling and starting Nginx..."
+    systemctl enable nginx >>"$LOG_FILE" 2>&1 || true
+    systemctl restart nginx >>"$LOG_FILE" 2>&1 || die "Failed to start Nginx"
     
     # Wait for service to start
-    sleep 3
+    sleep 2
     
     log SUCCESS "Services started"
 }
@@ -388,12 +433,12 @@ verify_installation() {
     
     local failed=false
     
-    if systemctl is-active --quiet bentopdf; then
-        log SUCCESS "BentoPDF service is running"
+    if systemctl is-active --quiet nginx; then
+        log SUCCESS "Nginx service is running"
     else
-        log ERROR "BentoPDF service is not running"
+        log ERROR "Nginx service is not running"
         print_subheader "Checking service status..."
-        systemctl status bentopdf --no-pager >> "$LOG_FILE" 2>&1 || true
+        systemctl status nginx --no-pager >> "$LOG_FILE" 2>&1 || true
         failed=true
     fi
     
@@ -406,7 +451,7 @@ verify_installation() {
     fi
     
     if [[ "$failed" == true ]]; then
-        log WARN "Service failed to start - check logs: journalctl -u bentopdf"
+        log WARN "Service failed to start - check logs: journalctl -u nginx"
     fi
 }
 
@@ -421,13 +466,14 @@ show_summary() {
     echo
     print_kv "BentoPDF URL" "http://${ip}:${BENTOPDF_PORT}"
     print_kv "Install Directory" "$INSTALL_DIR"
-    print_kv "Service" "bentopdf.service"
+    print_kv "Web Root" "${INSTALL_DIR}/dist"
+    print_kv "Service" "nginx.service"
     print_kv "Log File" "$LOG_FILE"
     echo
     print_header "Management Commands"
-    echo "  systemctl status bentopdf    # Check status"
-    echo "  systemctl restart bentopdf   # Restart service"
-    echo "  journalctl -u bentopdf -f    # View logs"
+    echo "  systemctl status nginx       # Check status"
+    echo "  systemctl restart nginx      # Restart service"
+    echo "  journalctl -u nginx -f       # View logs"
     echo
 }
 
@@ -477,9 +523,11 @@ main() {
     
     install_base_packages
     install_nodejs
+    install_nginx
     fetch_bentopdf
     build_bentopdf
     
+    configure_nginx
     create_systemd_service
     configure_firewall
     start_services

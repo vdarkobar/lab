@@ -92,7 +92,7 @@ readonly APP_REGISTRY=(
     "Unbound DNS|unbound.sh|systemctl is-active --quiet unbound"
     "Samba File Server|samba.sh|systemctl is-active --quiet smbd"
     "BookStack Wiki|bookstack.sh|[[ -f /etc/apache2/sites-enabled/bookstack.conf ]] && [[ -d /opt/bookstack ]]"
-    "BentoPDF|bentopdf.sh|systemctl is-active --quiet bentopdf"
+    "BentoPDF|bentopdf.sh|[[ -f /etc/nginx/sites-enabled/bentopdf ]] && [[ -d /opt/bentopdf/dist ]]"
     # Add more apps here - one per line
     # "App Name|script.sh|detection command that returns 0 if installed"
 )

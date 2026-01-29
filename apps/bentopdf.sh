@@ -55,6 +55,7 @@ readonly BENTOPDF_REPO="alam00000/bentopdf"
 
 # Logging
 readonly LOG_DIR="/var/log/lab"
+mkdir -p "$LOG_DIR" 2>/dev/null || true
 readonly LOG_FILE="${LOG_DIR}/bentopdf-$(date +%Y%m%d-%H%M%S).log"
 
 export DEBIAN_FRONTEND=noninteractive

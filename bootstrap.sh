@@ -156,6 +156,7 @@ download_components() {
         "apps/unbound.sh|Unbound DNS Installer"
         "apps/samba.sh|Samba File Server Installer"
         "apps/bookstack.sh|Bookstack Wiki Installer"
+        "apps/bentopdf.sh|BentoPDF editor Installer"
     )
     
     # Download each file

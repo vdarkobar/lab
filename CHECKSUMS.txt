@@ -11,7 +11,7 @@
 2b85d02194c304fc1189e53d8a18b0d9a4eb1595d6b4d5066df14157a55946e0  lib/helpers.sh
 
 # Server Scripts
-852caf4b186772039e3ec4b2b07da9eae1baba8e1917b07c18ff54d97f4946a7  server/hardening.sh
+ff768195ec97bfae026d9b00ab18444fd61d2379781e43e57d25d424b6200b5b  server/hardening.sh
 ea8630d71dea83c8c2e6fc6270ee91a515dcd04208e8eb9eaa4308798cad0ca4  server/jump.sh
 
 # PVE Scripts
@@ -19,6 +19,7 @@ ea8630d71dea83c8c2e6fc6270ee91a515dcd04208e8eb9eaa4308798cad0ca4  server/jump.sh
 2249cb2cb0e86dd8d2abfa8d5a4fb21439dcc7dade7be48a592f361e3da4c0f2  pve/debvm.sh
 
 # Application Scripts
+5b566d2ce01bf71902e77df9f4e6e19e3ca93c7f3ccb62db6d512826c4a4e074  apps/bentopdf.sh
 3b0d802443460967d17d6b31374a36d9227f5ee03c21ac6f970a623019ea8636  apps/bookstack.sh
 91c0d5884973f57fa9a7c8a604121a7634d185f1d09eb038ae4840dc55c82fe8  apps/docker.sh
 d192f20c6956efeb73e6deae0275e34ea6723aeeb0c886a953b4f9bea4f24114  apps/npm.sh

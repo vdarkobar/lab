@@ -55,7 +55,6 @@ readonly BENTOPDF_REPO="alam00000/bentopdf"
 
 # Logging
 readonly LOG_DIR="/var/log/lab"
-mkdir -p "$LOG_DIR" 2>/dev/null || true
 readonly LOG_FILE="${LOG_DIR}/bentopdf-$(date +%Y%m%d-%H%M%S).log"
 
 export DEBIAN_FRONTEND=noninteractive
@@ -469,8 +468,8 @@ prompt_reboot() {
 
 main() {
     check_privileges
-    setup_logging
-    show_header
+    setup_logging      # Creates LOG_DIR with root privileges
+    show_header        # Now log() can write to LOG_FILE
     check_environment
     
     install_base_packages

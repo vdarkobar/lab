@@ -424,7 +424,11 @@ show_summary() {
   log_line "Setup finished, your BookStack instance should now be installed!"
   log_line "- Default login email: admin@admin.com"
   log_line "- Default login password: password"
-  log_line "- Access URL: http://${ip}/ or http://${BOOKSTACK_DOMAIN}/"
+  if [[ "$ip" == "$BOOKSTACK_DOMAIN" ]]; then
+    log_line "- Access URL: http://${ip}/"
+  else
+    log_line "- Access URL: http://${ip}/ or http://${BOOKSTACK_DOMAIN}/"
+  fi
   log_line "- BookStack install path: ${BOOKSTACK_DIR}"
   log_line "- DB name/user: ${DB_NAME}/${DB_USER}"
   log_line "- DB password: ${DB_PASS}"

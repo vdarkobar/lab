@@ -12,16 +12,18 @@ case "${1:-}" in
     --help|-h)
         echo "BentoPDF Installer v${SCRIPT_VERSION}"
         echo
-        echo "Usage: $0 [--help]"
+        echo "Usage: $0 [--help] [--force]"
         echo
         echo "Installation:"
         echo "  bootstrap.sh → hardening.sh → Select \"BentoPDF\""
         echo
         echo "What it does:"
-        echo "  - Installs Node.js 24.x"
-        echo "  - Downloads and builds BentoPDF"
-        echo "  - Configures systemd service"
+        echo "  - Downloads prebuilt BentoPDF release"
+        echo "  - Installs and configures Nginx"
         echo "  - Opens firewall port 8080"
+        echo
+        echo "Options:"
+        echo "  --force    Remove existing installation and reinstall"
         echo
         echo "Environment variables:"
         echo "  SKIP_REBOOT=true    Skip reboot prompt"
@@ -29,7 +31,7 @@ case "${1:-}" in
         echo
         echo "Files created:"
         echo "  /opt/bentopdf                  Application directory"
-        echo "  /lib/systemd/system/bentopdf.service  Systemd service"
+        echo "  /etc/nginx/sites-available/bentopdf  Nginx config"
         echo "  /var/log/lab/bentopdf-*.log   Installation log"
         echo
         echo "Default access:"
@@ -49,9 +51,16 @@ readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Installation paths
 readonly INSTALL_DIR="/opt/bentopdf"
-readonly NODE_MAJOR="24"
 readonly BENTOPDF_PORT="${BENTOPDF_PORT:-8080}"
 readonly BENTOPDF_REPO="alam00000/bentopdf"
+
+# Handle --force flag
+FORCE_INSTALL=false
+for arg in "$@"; do
+    case "$arg" in
+        --force|-f) FORCE_INSTALL=true ;;
+    esac
+done
 
 # Logging directory (created early so LOG_FILE can be set)
 readonly LOG_DIR="/var/log/lab"
@@ -96,7 +105,7 @@ readonly LOG_FILE="${LOG_DIR}/bentopdf-$(date +%Y%m%d-%H%M%S).log"
 
 show_header() {
     draw_box "BentoPDF Installer v${SCRIPT_VERSION}"
-    log INFO "Self-hosted PDF editor with Node.js ${NODE_MAJOR}"
+    log INFO "Self-hosted PDF toolkit (prebuilt static files)"
     echo
 }
 
@@ -125,13 +134,20 @@ check_environment() {
     fi
     
     # Check if BentoPDF already installed
-    if [[ -d "$INSTALL_DIR" ]] && [[ -d "$INSTALL_DIR/dist" ]]; then
-        die "${INSTALL_DIR}/dist already exists - BentoPDF may already be installed"
+    if [[ -d "$INSTALL_DIR" ]]; then
+        if [[ "$FORCE_INSTALL" == true ]]; then
+            log WARN "Removing existing installation (--force)"
+            rm -rf "$INSTALL_DIR"
+            rm -f /etc/nginx/sites-enabled/bentopdf
+            rm -f /etc/nginx/sites-available/bentopdf
+        else
+            die "${INSTALL_DIR} already exists. Use --force to reinstall."
+        fi
     fi
     
-    # Check if nginx site already configured for bentopdf
-    if [[ -f /etc/nginx/sites-enabled/bentopdf ]]; then
-        die "Nginx site 'bentopdf' already configured"
+    # Check if nginx site already configured for bentopdf (without --force)
+    if [[ -f /etc/nginx/sites-enabled/bentopdf ]] && [[ "$FORCE_INSTALL" != true ]]; then
+        die "Nginx site 'bentopdf' already configured. Use --force to reinstall."
     fi
     
     log SUCCESS "Environment checks passed"
@@ -195,48 +211,10 @@ install_base_packages() {
     
     print_subheader "Installing dependencies..."
     apt-get install -y \
-        ca-certificates curl git gnupg \
+        ca-certificates curl jq unzip \
         >>"$LOG_FILE" 2>&1 || die "Failed to install base packages"
     
     log SUCCESS "Base packages installed"
-}
-
-install_nodejs() {
-    log STEP "Installing Node.js ${NODE_MAJOR}"
-    
-    # Check if Node.js is already installed with correct version
-    if command -v node >/dev/null 2>&1; then
-        local current_version
-        current_version=$(node --version 2>/dev/null | sed 's/v//' | cut -d. -f1)
-        if [[ "$current_version" -ge "$NODE_MAJOR" ]]; then
-            log SUCCESS "Node.js v$(node --version) already installed"
-            return 0
-        fi
-        print_subheader "Upgrading Node.js from v${current_version} to v${NODE_MAJOR}..."
-    fi
-    
-    # Setup NodeSource repository
-    print_subheader "Adding NodeSource repository..."
-    mkdir -p /etc/apt/keyrings
-    
-    if [[ ! -f /etc/apt/keyrings/nodesource.gpg ]]; then
-        curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | \
-            gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg >>"$LOG_FILE" 2>&1
-    fi
-    
-    echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_${NODE_MAJOR}.x nodistro main" > \
-        /etc/apt/sources.list.d/nodesource.list
-    
-    print_subheader "Installing Node.js..."
-    apt-get update -y >>"$LOG_FILE" 2>&1
-    apt-get install -y nodejs >>"$LOG_FILE" 2>&1 || die "Failed to install Node.js"
-    
-    # Verify installation
-    if ! command -v node >/dev/null 2>&1; then
-        die "Node.js installation failed - node command not found"
-    fi
-    
-    log SUCCESS "Node.js $(node --version) installed"
 }
 
 fetch_bentopdf() {
@@ -244,7 +222,7 @@ fetch_bentopdf() {
     
     print_subheader "Fetching latest release from GitHub..."
     
-    # Get latest release info
+    # Get latest release info using jq for robust JSON parsing
     local release_info
     release_info=$(curl -fsSL "https://api.github.com/repos/${BENTOPDF_REPO}/releases/latest" 2>>"$LOG_FILE")
     
@@ -252,54 +230,53 @@ fetch_bentopdf() {
         die "Failed to fetch release information from GitHub"
     fi
     
-    local tarball_url
-    tarball_url=$(echo "$release_info" | grep -o '"tarball_url": *"[^"]*"' | cut -d'"' -f4)
+    # Parse version and find dist zip asset
     local version
-    version=$(echo "$release_info" | grep -o '"tag_name": *"[^"]*"' | cut -d'"' -f4)
+    version=$(echo "$release_info" | jq -r '.tag_name // empty')
     
-    if [[ -z "$tarball_url" ]]; then
-        die "Failed to parse release tarball URL"
+    if [[ -z "$version" ]]; then
+        die "Failed to parse release version"
     fi
     
-    print_subheader "Downloading version ${version}..."
+    # Find the dist-*.zip asset URL
+    local dist_url
+    dist_url=$(echo "$release_info" | jq -r '.assets[] | select(.name | startswith("dist-")) | select(.name | endswith(".zip")) | .browser_download_url' | head -1)
     
-    # Create install directory
+    if [[ -z "$dist_url" ]]; then
+        die "No dist-*.zip asset found in release ${version}"
+    fi
+    
+    local dist_name
+    dist_name=$(echo "$release_info" | jq -r '.assets[] | select(.name | startswith("dist-")) | select(.name | endswith(".zip")) | .name' | head -1)
+    
+    print_subheader "Downloading ${dist_name} (${version})..."
+    
+    # Download the dist zip
+    local tmp_zip="/tmp/${dist_name}"
+    curl -fsSL "$dist_url" -o "$tmp_zip" >>"$LOG_FILE" 2>&1 || die "Failed to download dist zip"
+    
+    # Create install directory and extract
     mkdir -p "$INSTALL_DIR"
     
-    # Download and extract
-    local tmp_tarball="/tmp/bentopdf-${version}.tar.gz"
-    curl -fsSL "$tarball_url" -o "$tmp_tarball" >>"$LOG_FILE" 2>&1 || die "Failed to download tarball"
-    
     print_subheader "Extracting to ${INSTALL_DIR}..."
-    tar -xzf "$tmp_tarball" -C "$INSTALL_DIR" --strip-components=1 >>"$LOG_FILE" 2>&1 || die "Failed to extract tarball"
-    rm -f "$tmp_tarball"
+    unzip -q "$tmp_zip" -d "$INSTALL_DIR" >>"$LOG_FILE" 2>&1 || die "Failed to extract dist zip"
+    rm -f "$tmp_zip"
     
-    # Verify extraction
-    if [[ ! -f "${INSTALL_DIR}/package.json" ]]; then
-        die "Extraction failed - package.json not found"
+    # Verify extraction - files should be directly in INSTALL_DIR or in a subdirectory
+    if [[ ! -f "${INSTALL_DIR}/index.html" ]]; then
+        # Check if extracted to subdirectory
+        local subdir
+        subdir=$(find "$INSTALL_DIR" -maxdepth 1 -type d -name "dist*" | head -1)
+        if [[ -n "$subdir" ]] && [[ -f "${subdir}/index.html" ]]; then
+            # Move contents up
+            mv "${subdir}"/* "$INSTALL_DIR"/
+            rmdir "$subdir"
+        else
+            die "Extraction failed - index.html not found"
+        fi
     fi
     
-    log SUCCESS "BentoPDF ${version} downloaded"
-}
-
-build_bentopdf() {
-    log STEP "Building BentoPDF"
-    
-    cd "$INSTALL_DIR"
-    
-    print_subheader "Installing npm dependencies (this may take a while)..."
-    npm ci --no-audit --no-fund >>"$LOG_FILE" 2>&1 || die "Failed to install npm dependencies"
-    
-    print_subheader "Building application (this may take a while)..."
-    export SIMPLE_MODE=true
-    npm run build -- --mode production >>"$LOG_FILE" 2>&1 || die "Failed to build BentoPDF"
-    
-    # Verify build output
-    if [[ ! -d "${INSTALL_DIR}/dist" ]]; then
-        die "Build failed - dist directory not found"
-    fi
-    
-    log SUCCESS "BentoPDF built successfully"
+    log SUCCESS "BentoPDF ${version} installed"
 }
 
 install_nginx() {
@@ -327,7 +304,7 @@ server {
     
     server_name _;
     
-    root /opt/bentopdf/dist;
+    root /opt/bentopdf;
     index index.html index.htm;
     
     # Include standard MIME types
@@ -477,7 +454,6 @@ show_summary() {
     echo
     print_kv "BentoPDF URL" "http://${ip}:${BENTOPDF_PORT}"
     print_kv "Install Directory" "$INSTALL_DIR"
-    print_kv "Web Root" "${INSTALL_DIR}/dist"
     print_kv "Service" "nginx.service"
     print_kv "Log File" "$LOG_FILE"
     echo
@@ -485,6 +461,9 @@ show_summary() {
     echo "  systemctl status nginx       # Check status"
     echo "  systemctl restart nginx      # Restart service"
     echo "  journalctl -u nginx -f       # View logs"
+    echo
+    print_header "Reinstall / Update"
+    echo "  sudo ./bentopdf.sh --force   # Reinstall with latest version"
     echo
 }
 
@@ -533,10 +512,8 @@ main() {
     check_environment
     
     install_base_packages
-    install_nodejs
     install_nginx
     fetch_bentopdf
-    build_bentopdf
     
     configure_nginx
     create_systemd_service

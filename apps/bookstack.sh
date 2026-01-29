@@ -78,7 +78,7 @@ export COMPOSER_ALLOW_SUPERUSER=1
 export COMPOSER_NO_INTERACTION=1
 export COMPOSER_DISABLE_XDEBUG_WARN=1
 
-# original “admin” user for file ownership (official script uses SUDO_USER)
+# original "admin" user for file ownership (official script uses SUDO_USER)
 SCRIPT_USER="${BOOKSTACK_ADMIN_USER:-${SUDO_USER:-}}"
 if [[ -z "$SCRIPT_USER" ]]; then
   SCRIPT_USER="$(logname 2>/dev/null || true)"
@@ -149,7 +149,7 @@ run_logged() {
 }
 
 #############################################################################
-# Spinner (small, one-line “something is happening”)
+# Spinner (small, one-line "something is happening")
 #############################################################################
 
 run_with_spinner() {
@@ -230,7 +230,7 @@ prompt_for_domain_if_needed() {
 }
 
 #############################################################################
-# Preflight (align with official “fresh server” checks)
+# Preflight (align with official "fresh server" checks)
 #############################################################################
 
 run_pre_install_checks() {
@@ -379,6 +379,38 @@ EOL
   run_with_spinner "Starting PHP-FPM" systemctl start php8.4-fpm.service
 }
 
+configure_firewall() {
+  print_header "Configuring Firewall (UFW)"
+  
+  # UFW optional
+  if ! command -v ufw >/dev/null 2>&1; then
+    print_warning "UFW not installed - skipping firewall configuration"
+    return 0
+  fi
+  
+  # Check if UFW is functional
+  if ! run_cmd ufw status >/dev/null 2>&1; then
+    print_warning "UFW not functional in this environment - skipping"
+    print_info "You may need to open port 80/tcp (and 443/tcp for HTTPS) manually"
+    return 0
+  fi
+  
+  if ! run_cmd ufw status | grep -q "Status: active"; then
+    print_warning "UFW installed but not active - skipping firewall configuration"
+    return 0
+  fi
+  
+  # Application-specific ports
+  print_step "Allowing BookStack HTTP (80/tcp)..."
+  run_cmd ufw allow 80/tcp comment 'BookStack HTTP' >>"$LOG_FILE" 2>&1 || true
+  
+  # Optional: uncomment if TLS terminates on this host
+  # print_step "Allowing BookStack HTTPS (443/tcp)..."
+  # run_cmd ufw allow 443/tcp comment 'BookStack HTTPS' >>"$LOG_FILE" 2>&1 || true
+  
+  print_success "Firewall rules applied"
+}
+
 #############################################################################
 # Summary + optional reboot
 #############################################################################
@@ -439,29 +471,32 @@ main() {
   log_line "Installing using the domain or IP \"${BOOKSTACK_DOMAIN}\""
   log_line ""
 
-  log_line "[1/8] Installing required system packages... (This may take several minutes)"
+  log_line "[1/9] Installing required system packages... (This may take several minutes)"
   run_package_installs || error_out "Package install failed"
 
-  log_line "[2/8] Preparing MySQL database..."
+  log_line "[2/9] Preparing MySQL database..."
   run_database_setup || error_out "Database setup failed"
 
-  log_line "[3/8] Downloading BookStack to ${BOOKSTACK_DIR}..."
+  log_line "[3/9] Downloading BookStack to ${BOOKSTACK_DIR}..."
   run_bookstack_download || error_out "BookStack download failed"
 
-  log_line "[4/8] Downloading PHP dependency files..."
+  log_line "[4/9] Downloading PHP dependency files..."
   run_download_bookstack_vendor_files || error_out "Vendor download failed"
 
-  log_line "[5/8] Creating and populating BookStack .env file..."
+  log_line "[5/9] Creating and populating BookStack .env file..."
   run_update_bookstack_env || error_out ".env setup failed"
 
-  log_line "[6/8] Running initial BookStack database migrations..."
+  log_line "[6/9] Running initial BookStack database migrations..."
   run_bookstack_database_migrations || error_out "Migrations failed"
 
-  log_line "[7/8] Setting BookStack file & folder permissions..."
+  log_line "[7/9] Setting BookStack file & folder permissions..."
   run_set_application_file_permissions || error_out "Permissions step failed"
 
-  log_line "[8/8] Configuring apache server..."
+  log_line "[8/9] Configuring apache server..."
   run_configure_apache || error_out "Apache configuration failed"
+
+  log_line "[9/9] Configuring firewall..."
+  configure_firewall
 
   show_summary
   prompt_reboot

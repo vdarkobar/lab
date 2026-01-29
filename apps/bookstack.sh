@@ -37,7 +37,7 @@ case "${1:-}" in
     echo
     echo "Default credentials:"
     echo "  Email:    admin@admin.com"
-    echo "  Password: changeme"
+    echo "  Password: password"
     echo
     echo "Files created:"
     echo "  /opt/bookstack                  Application directory"

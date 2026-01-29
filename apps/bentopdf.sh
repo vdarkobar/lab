@@ -53,9 +53,9 @@ readonly NODE_MAJOR="24"
 readonly BENTOPDF_PORT="${BENTOPDF_PORT:-8080}"
 readonly BENTOPDF_REPO="alam00000/bentopdf"
 
-# Logging
+# Logging directory (created early so LOG_FILE can be set)
 readonly LOG_DIR="/var/log/lab"
-readonly LOG_FILE="${LOG_DIR}/bentopdf-$(date +%Y%m%d-%H%M%S).log"
+mkdir -p "$LOG_DIR" 2>/dev/null || true
 
 export DEBIAN_FRONTEND=noninteractive
 
@@ -86,6 +86,9 @@ else
     die() { print_error "$1"; exit 1; }
     log() { local level="$1"; shift; echo "[$level] $*"; }
 fi
+
+# Now safe to set LOG_FILE (formatting.sh is loaded, directory exists)
+readonly LOG_FILE="${LOG_DIR}/bentopdf-$(date +%Y%m%d-%H%M%S).log"
 
 #############################################################################
 # Utility Functions

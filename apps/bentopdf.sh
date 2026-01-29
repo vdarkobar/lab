@@ -467,9 +467,9 @@ prompt_reboot() {
 #############################################################################
 
 main() {
-    show_header
     check_privileges
     setup_logging
+    show_header
     check_environment
     
     install_base_packages

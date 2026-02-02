@@ -143,21 +143,22 @@ download_components() {
     fi
     print_success "Downloaded: CHECKSUMS.txt"
     
-    # List of files to download: path|display_name
-    local files=(
-        "lib/formatting.sh|Formatting Library"
-        "lib/helpers.sh|Helper Functions Library"
-        "server/hardening.sh|Hardening Script"
-        "server/jump.sh|Jump Server Script"
-        "pve/debvm.sh|Debian VM Template Script"
-        "pve/deblxc.sh|Debian LXC Template Script"
-        "apps/docker.sh|Docker Installer"
-        "apps/npm.sh|Nginx Proxy Manager Installer"
-        "apps/unbound.sh|Unbound DNS Installer"
-        "apps/samba.sh|Samba File Server Installer"
-        "apps/bookstack.sh|Bookstack Wiki Installer"
-        "apps/bentopdf.sh|BentoPDF editor Installer"
-    )
+# List of files to download: path|display_name
+local files=(
+    "lib/formatting.sh|Formatting Library"
+    "lib/helpers.sh|Helper Functions Library"
+    "server/hardening.sh|Hardening Script"
+    "server/jump.sh|Jump Server Script"
+    "pve/debvm.sh|Debian VM Template Script"
+    "pve/deblxc.sh|Debian LXC Template Script"
+    "apps/docker.sh|Docker Installer"
+    "apps/npm.sh|Nginx Proxy Manager Installer"
+    "apps/cloudflared.sh|Cloudflare Tunnel Installer"
+    "apps/unbound.sh|Unbound DNS Installer"
+    "apps/samba.sh|Samba File Server Installer"
+    "apps/bookstack.sh|Bookstack Wiki Installer"
+    "apps/bentopdf.sh|BentoPDF editor Installer"
+)
     
     # Download each file
     for file_entry in "${files[@]}"; do

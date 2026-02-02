@@ -39,6 +39,7 @@ case "${1:-}" in
         echo "Available apps (via menu):"
         echo "  - Docker + Compose v2"
         echo "  - Nginx Proxy Manager"
+        echo "  - Cloudflare Tunnel"
         echo "  - Unbound DNS"
         echo "  - Samba File Server"
         echo "  - BookStack Wiki"
@@ -89,6 +90,7 @@ fi
 readonly APP_REGISTRY=(
     "Docker|docker.sh|command -v docker >/dev/null 2>&1"
     "Nginx Proxy Manager|npm.sh|systemctl is-active --quiet openresty || systemctl is-active --quiet nginx-proxy-manager"
+    "Cloudflare Tunnel|cloudflared.sh|systemctl is-active --quiet cloudflared"
     "Unbound DNS|unbound.sh|systemctl is-active --quiet unbound"
     "Samba File Server|samba.sh|systemctl is-active --quiet smbd"
     "BookStack Wiki|bookstack.sh|[[ -f /etc/apache2/sites-enabled/bookstack.conf ]] && [[ -d /opt/bookstack ]]"
@@ -394,7 +396,7 @@ install_packages() {
         fail2ban
         wget
         curl
-        gnupg
+        gnupg2
         argon2
         lsb-release
         gnupg-agent
@@ -919,7 +921,7 @@ show_app_menu() {
         if check_app_installed "$detection_cmd"; then
             print_subheader "${C_DIM}$display_name - Already installed ✓${C_RESET}"
         else
-            ((app_count++))
+            ((app_count++)) || true
             available_apps+=("$app_entry")
             print_subheader "${C_CYAN}${app_count})${C_RESET} $display_name ${C_DIM}(${script_name})${C_RESET}"
         fi

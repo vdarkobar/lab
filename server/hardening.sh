@@ -394,7 +394,7 @@ install_packages() {
         fail2ban
         wget
         curl
-        gnupg2
+        gnupg
         argon2
         lsb-release
         gnupg-agent

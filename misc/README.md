@@ -34,10 +34,11 @@ chmod +x bootstrap.sh
                              App Menu
                              ├── 1) <a href="https://github.com/vdarkobar/lab/tree/main/misc/Docker.md">Docker</a>
                              ├── 2) <a href="https://github.com/vdarkobar/lab/tree/main/misc/NginxProxyManager.md">Nginx Proxy Manager</a>
-                             ├── 3) <a href="https://github.com/vdarkobar/lab/tree/main/misc/UnboundDNS.md">Unbound DNS</a> ──┐
-                             ├── 4) <a href="https://github.com/vdarkobar/lab/tree/main/misc/SambaFileServer.md">Samba File Server</a>
-                             ├── 5) <a href="https://github.com/vdarkobar/lab/tree/main/misc/BookStack.md">BookStack</a>     │
-                             ├── 6) <a href="https://github.com/vdarkobar/lab/tree/main/misc/BentoPDF.md">BentoPDF</a>      │
+                             ├── 3) <a href="https://github.com/vdarkobar/lab/tree/main/misc/Cloudflared.md">Cloudflared</a>  ← NEW
+                             ├── 4) <a href="https://github.com/vdarkobar/lab/tree/main/misc/UnboundDNS.md">Unbound DNS</a> ──┐
+                             ├── 5) <a href="https://github.com/vdarkobar/lab/tree/main/misc/SambaFileServer.md">Samba File Server</a>
+                             ├── 6) <a href="https://github.com/vdarkobar/lab/tree/main/misc/BookStack.md">BookStack</a>     │
+                             ├── 7) <a href="https://github.com/vdarkobar/lab/tree/main/misc/BentoPDF.md">BentoPDF</a>      │
                              └── N) Done          │
                                                   ▼
                                              Config Menu

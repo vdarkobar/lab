@@ -46,6 +46,7 @@ CLOUDFLARED_SILENT="${CLOUDFLARED_SILENT:-false}"
 
 load_formatting_library() {
     local lib_paths=(
+        "${SCRIPT_DIR}/../lib/formatting.sh"
         "${SCRIPT_DIR}/lib/formatting.sh"
         "/opt/lab/lib/formatting.sh"
         "./lib/formatting.sh"
@@ -59,13 +60,65 @@ load_formatting_library() {
         fi
     done
     
-    # Fallback: Define minimal formatting functions
-    msg()      { echo "[INFO]    $*"; }
-    msg_ok()   { echo "[OK]      $*"; }
-    msg_warn() { echo "[WARN]    $*"; }
-    msg_err()  { echo "[ERROR]   $*" >&2; }
-    msg_info() { echo "[INFO]    $*"; }
-    header()   { echo ""; echo "═══ $* ═══"; echo ""; }
+    # Fallback: Define formatting when library not available
+    # Colors (simplified)
+    if [[ -t 1 ]] && command -v tput >/dev/null 2>&1; then
+        C_RESET=$(tput sgr0)
+        C_BOLD=$(tput bold)
+        C_DIM=$(tput dim)
+        C_RED=$(tput setaf 1)
+        C_GREEN=$(tput setaf 2)
+        C_YELLOW=$(tput setaf 3)
+        C_BLUE=$(tput setaf 4)
+        C_CYAN=$(tput setaf 6)
+        C_WHITE=$(tput setaf 7)
+    else
+        C_RESET="" C_BOLD="" C_DIM=""
+        C_RED="" C_GREEN="" C_YELLOW="" C_BLUE="" C_CYAN="" C_WHITE=""
+    fi
+    
+    # Symbols
+    if [[ "${LANG:-}" =~ UTF-8 ]] || [[ "${LC_ALL:-}" =~ UTF-8 ]]; then
+        SYMBOL_SUCCESS="✓" SYMBOL_ERROR="✗" SYMBOL_WARNING="⚠"
+        SYMBOL_INFO="ℹ" SYMBOL_ARROW="→" SYMBOL_BULLET="•"
+    else
+        SYMBOL_SUCCESS="+" SYMBOL_ERROR="x" SYMBOL_WARNING="!"
+        SYMBOL_INFO="i" SYMBOL_ARROW=">" SYMBOL_BULLET="*"
+    fi
+    
+    # Output functions
+    print_success()   { echo "${C_GREEN}${C_BOLD}${SYMBOL_SUCCESS}${C_RESET} ${C_GREEN}$*${C_RESET}"; }
+    print_error()     { echo "${C_RED}${C_BOLD}${SYMBOL_ERROR}${C_RESET} ${C_RED}$*${C_RESET}" >&2; }
+    print_warning()   { echo "${C_YELLOW}${C_BOLD}${SYMBOL_WARNING}${C_RESET} ${C_YELLOW}$*${C_RESET}"; }
+    print_info()      { echo "${C_BLUE}${C_BOLD}${SYMBOL_INFO}${C_RESET} ${C_BLUE}$*${C_RESET}"; }
+    print_step()      { echo "${C_CYAN}${C_BOLD}${SYMBOL_ARROW}${C_RESET} ${C_CYAN}$*${C_RESET}"; }
+    print_header()    { echo; echo "${C_BOLD}${C_CYAN}━━━ $* ━━━${C_RESET}"; }
+    print_subheader() { echo "${C_DIM}${SYMBOL_BULLET} $*${C_RESET}"; }
+    print_kv()        { printf "${C_CYAN}%-20s${C_RESET} ${C_WHITE}%s${C_RESET}\n" "$1:" "$2"; }
+    draw_separator()  { echo "${C_DIM}$(printf '─%.0s' $(seq 1 70))${C_RESET}"; }
+    draw_box() {
+        local text="$1" width=68
+        local padding=$(( (width - ${#text} - 2) / 2 ))
+        echo "${C_CYAN}"
+        echo "╔$(printf '═%.0s' $(seq 1 $width))╗"
+        printf "║%*s%s%*s║\n" $padding "" "$text" $padding ""
+        echo "╚$(printf '═%.0s' $(seq 1 $width))╝"
+        echo "${C_RESET}"
+    }
+    log() {
+        local level="$1"; shift
+        local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+        [[ -n "${LOG_FILE:-}" ]] && echo "${timestamp} [${level}] $*" >> "$LOG_FILE"
+        case "$level" in
+            SUCCESS) print_success "$*" ;;
+            ERROR)   print_error "$*" ;;
+            WARN)    print_warning "$*" ;;
+            INFO)    print_info "$*" ;;
+            STEP)    print_step "$*" ;;
+            *)       echo "$*" ;;
+        esac
+    }
+    die() { log ERROR "$@"; exit 1; }
     
     return 0
 }
@@ -95,23 +148,10 @@ setup_logging() {
     fi
 }
 
-log() {
-    local level="$1"
-    shift
-    local message="$*"
-    local timestamp
-    timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
-    
-    # Write to log file if possible
-    if [[ -w "$LOG_FILE" ]] || [[ -w "$LOG_DIR" ]]; then
-        echo "[$timestamp] [$level] $message" >> "$LOG_FILE" 2>/dev/null || true
-    fi
-}
-
-log_info()  { log "INFO" "$@"; }
-log_warn()  { log "WARN" "$@"; }
-log_error() { log "ERROR" "$@"; }
-log_ok()    { log "OK" "$@"; }
+log_info()  { log INFO "$@"; }
+log_warn()  { log WARN "$@"; }
+log_error() { log ERROR "$@"; }
+log_ok()    { log SUCCESS "$@"; }
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  Helper Functions
@@ -127,8 +167,8 @@ is_root() {
 
 require_root() {
     if ! is_root; then
-        msg_err "This operation requires root privileges."
-        msg_info "Please run with: sudo $0 $*"
+        print_error "This operation requires root privileges."
+        print_info "Please run with: sudo $0 $*"
         exit 1
     fi
 }
@@ -173,27 +213,27 @@ install_dependencies() {
     
     # Install if needed
     if [[ ${#deps_needed[@]} -gt 0 ]]; then
-        header "Installing Dependencies"
+        print_header "Installing Dependencies"
         
-        msg_info "Required packages: ${deps_needed[*]}"
+        print_info "Required packages: ${deps_needed[*]}"
         log_info "Installing dependencies: ${deps_needed[*]}"
         
         # Update package lists
-        msg_info "Updating package lists..."
+        print_info "Updating package lists..."
         if ! apt-get update -qq; then
-            msg_err "Failed to update package lists"
+            print_error "Failed to update package lists"
             log_error "apt-get update failed"
             exit 1
         fi
         
         # Install dependencies
         if ! DEBIAN_FRONTEND=noninteractive apt-get install -y "${deps_needed[@]}"; then
-            msg_err "Failed to install dependencies"
+            print_error "Failed to install dependencies"
             log_error "apt-get install failed for: ${deps_needed[*]}"
             exit 1
         fi
         
-        msg_ok "Dependencies installed"
+        print_success "Dependencies installed"
         log_ok "Dependencies installed: ${deps_needed[*]}"
     fi
 }
@@ -203,54 +243,54 @@ install_dependencies() {
 # ─────────────────────────────────────────────────────────────────────────────
 
 preflight_checks() {
-    header "Preflight Checks"
+    print_header "Preflight Checks"
     local errors=0
     
     # Check for Debian
     if [[ ! -f /etc/debian_version ]]; then
-        msg_err "This script is designed for Debian-based systems."
+        print_error "This script is designed for Debian-based systems."
         log_error "Not a Debian-based system"
         ((errors++))
     else
         local debian_version
         debian_version=$(cat /etc/debian_version)
-        msg_ok "Debian detected: $debian_version"
+        print_success "Debian detected: $debian_version"
         log_info "Debian version: $debian_version"
     fi
     
     # Check for systemd
     if ! command_exists systemctl; then
-        msg_err "systemd is required but not found."
+        print_error "systemd is required but not found."
         log_error "systemd not found"
         ((errors++))
     else
-        msg_ok "systemd available"
+        print_success "systemd available"
     fi
     
     # Check internet connectivity
     if ! ping -c 1 -W 3 cloudflare.com &>/dev/null; then
-        msg_err "Cannot reach cloudflare.com - check internet connectivity."
+        print_error "Cannot reach cloudflare.com - check internet connectivity."
         log_error "No internet connectivity to cloudflare.com"
         ((errors++))
     else
-        msg_ok "Internet connectivity verified"
+        print_success "Internet connectivity verified"
     fi
     
     # Verify required tools are now available
     for tool in curl gpg apt-get; do
         if ! command_exists "$tool"; then
-            msg_err "Required tool not found: $tool"
+            print_error "Required tool not found: $tool"
             log_error "Missing required tool: $tool"
             ((errors++))
         fi
     done
     
     if [[ $errors -gt 0 ]]; then
-        msg_err "Preflight checks failed with $errors error(s)."
+        print_error "Preflight checks failed with $errors error(s)."
         exit 1
     fi
     
-    msg_ok "All preflight checks passed"
+    print_success "All preflight checks passed"
     log_info "Preflight checks completed successfully"
 }
 
@@ -261,23 +301,23 @@ preflight_checks() {
 get_tunnel_token() {
     # Check if token already provided via environment
     if [[ -n "$CLOUDFLARED_TUNNEL_TOKEN" ]]; then
-        msg_ok "Using tunnel token from environment variable"
+        print_success "Using tunnel token from environment variable"
         log_info "Token provided via CLOUDFLARED_TUNNEL_TOKEN"
         return 0
     fi
     
     # In silent mode, token is required
     if is_silent; then
-        msg_err "CLOUDFLARED_TUNNEL_TOKEN is required for silent installation."
+        print_error "CLOUDFLARED_TUNNEL_TOKEN is required for silent installation."
         log_error "Silent mode requires CLOUDFLARED_TUNNEL_TOKEN"
         exit 1
     fi
     
     # Interactive prompt
-    header "Tunnel Token Configuration"
+    print_header "Tunnel Token Configuration"
     
     echo ""
-    msg_info "A Cloudflare Tunnel token is required to connect this machine to your tunnel."
+    print_info "A Cloudflare Tunnel token is required to connect this machine to your tunnel."
     echo ""
     echo "  To get your token:"
     echo "    1. Log in to Cloudflare Zero Trust dashboard"
@@ -292,13 +332,13 @@ get_tunnel_token() {
         read -rp "Enter your Cloudflare Tunnel token: " CLOUDFLARED_TUNNEL_TOKEN
         
         if [[ -z "$CLOUDFLARED_TUNNEL_TOKEN" ]]; then
-            msg_warn "Token cannot be empty. Please try again."
+            print_warning "Token cannot be empty. Please try again."
             continue
         fi
         
         # Basic validation - tokens are base64-encoded JSON, typically start with eyJ
         if [[ ! "$CLOUDFLARED_TUNNEL_TOKEN" =~ ^eyJ ]]; then
-            msg_warn "Token format looks unusual (should start with 'eyJ')."
+            print_warning "Token format looks unusual (should start with 'eyJ')."
             read -rp "Continue anyway? [y/N]: " confirm
             if [[ ! "$confirm" =~ ^[Yy] ]]; then
                 continue
@@ -307,7 +347,7 @@ get_tunnel_token() {
         
         # Confirm token
         echo ""
-        msg_info "Token received (${#CLOUDFLARED_TUNNEL_TOKEN} characters)"
+        print_info "Token received (${#CLOUDFLARED_TUNNEL_TOKEN} characters)"
         read -rp "Is this correct? [Y/n]: " confirm
         if [[ ! "$confirm" =~ ^[Nn] ]]; then
             break
@@ -322,25 +362,25 @@ get_tunnel_token() {
 # ─────────────────────────────────────────────────────────────────────────────
 
 install_cloudflared() {
-    header "Installing Cloudflared"
+    print_header "Installing Cloudflared"
     
     # Check if already installed
     if command_exists cloudflared; then
         local current_version
         current_version=$(cloudflared --version 2>/dev/null | head -1 || echo "unknown")
-        msg_info "Cloudflared already installed: $current_version"
+        print_info "Cloudflared already installed: $current_version"
         log_info "Cloudflared already installed: $current_version"
         
         if ! is_silent; then
             read -rp "Reinstall/upgrade? [y/N]: " confirm
             if [[ ! "$confirm" =~ ^[Yy] ]]; then
-                msg_info "Skipping installation"
+                print_info "Skipping installation"
                 return 0
             fi
         fi
     fi
     
-    msg_info "Adding Cloudflare repository..."
+    print_info "Adding Cloudflare repository..."
     log_info "Adding Cloudflare APT repository"
     
     # Create keyrings directory if needed
@@ -349,11 +389,11 @@ install_cloudflared() {
     # Add Cloudflare GPG key
     if ! curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg | \
          gpg --dearmor -o /usr/share/keyrings/cloudflare-main.gpg 2>/dev/null; then
-        msg_err "Failed to add Cloudflare GPG key"
+        print_error "Failed to add Cloudflare GPG key"
         log_error "Failed to download/install Cloudflare GPG key"
         exit 1
     fi
-    msg_ok "Cloudflare GPG key added"
+    print_success "Cloudflare GPG key added"
     
     # Determine codename (fallback for Debian 13/trixie)
     local codename
@@ -362,10 +402,10 @@ install_cloudflared() {
     # Cloudflare may not have packages for newest Debian yet
     # Fall back to bookworm if trixie packages don't exist
     if [[ "$codename" == "trixie" ]]; then
-        msg_info "Debian 13 (trixie) detected, checking package availability..."
+        print_info "Debian 13 (trixie) detected, checking package availability..."
         # Try trixie first, fall back to bookworm
         if ! curl -fsSL "https://pkg.cloudflare.com/cloudflared/dists/${codename}/main/binary-amd64/Packages" &>/dev/null; then
-            msg_warn "Trixie packages not available, using bookworm repository"
+            print_warning "Trixie packages not available, using bookworm repository"
             log_warn "Using bookworm repository for Debian 13"
             codename="bookworm"
         fi
@@ -374,19 +414,19 @@ install_cloudflared() {
     # Add repository
     echo "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared ${codename} main" \
         > /etc/apt/sources.list.d/cloudflared.list
-    msg_ok "Repository added for: $codename"
+    print_success "Repository added for: $codename"
     
     # Update and install
-    msg_info "Updating package lists..."
+    print_info "Updating package lists..."
     if ! apt-get update -qq; then
-        msg_err "Failed to update package lists"
+        print_error "Failed to update package lists"
         log_error "apt-get update failed"
         exit 1
     fi
     
-    msg_info "Installing cloudflared..."
+    print_info "Installing cloudflared..."
     if ! DEBIAN_FRONTEND=noninteractive apt-get install -y cloudflared; then
-        msg_err "Failed to install cloudflared"
+        print_error "Failed to install cloudflared"
         log_error "apt-get install cloudflared failed"
         exit 1
     fi
@@ -395,27 +435,27 @@ install_cloudflared() {
     if command_exists cloudflared; then
         local version
         version=$(cloudflared --version 2>/dev/null | head -1 || echo "unknown")
-        msg_ok "Cloudflared installed: $version"
+        print_success "Cloudflared installed: $version"
         log_ok "Cloudflared installed successfully: $version"
     else
-        msg_err "Installation verification failed"
+        print_error "Installation verification failed"
         log_error "cloudflared binary not found after installation"
         exit 1
     fi
 }
 
 configure_service() {
-    header "Configuring Cloudflare Tunnel Service"
+    print_header "Configuring Cloudflare Tunnel Service"
     
     # Stop existing service if running
     if service_is_active "$CLOUDFLARED_SERVICE"; then
-        msg_info "Stopping existing cloudflared service..."
+        print_info "Stopping existing cloudflared service..."
         systemctl stop "$CLOUDFLARED_SERVICE" 2>/dev/null || true
     fi
     
     # Remove old service configuration if exists
     if [[ -f "/etc/systemd/system/${CLOUDFLARED_SERVICE}.service" ]]; then
-        msg_info "Removing old service configuration..."
+        print_info "Removing old service configuration..."
         systemctl disable "$CLOUDFLARED_SERVICE" 2>/dev/null || true
         rm -f "/etc/systemd/system/${CLOUDFLARED_SERVICE}.service"
         rm -f "/etc/systemd/system/${CLOUDFLARED_SERVICE}@.service"
@@ -424,35 +464,35 @@ configure_service() {
     
     # Clean up old config directory
     if [[ -d "$CLOUDFLARED_CONFIG_DIR" ]]; then
-        msg_info "Cleaning up old configuration..."
+        print_info "Cleaning up old configuration..."
         rm -rf "$CLOUDFLARED_CONFIG_DIR"
     fi
     
-    msg_info "Installing tunnel service with token..."
+    print_info "Installing tunnel service with token..."
     log_info "Running cloudflared service install"
     
     # Install service with token
     # The service install command creates systemd unit and config
     if ! cloudflared service install "$CLOUDFLARED_TUNNEL_TOKEN" 2>&1; then
-        msg_err "Failed to install cloudflared service"
+        print_error "Failed to install cloudflared service"
         log_error "cloudflared service install failed"
         exit 1
     fi
     
-    msg_ok "Service installed successfully"
+    print_success "Service installed successfully"
     log_ok "Cloudflared service installed"
     
     # Enable and start service
-    msg_info "Enabling and starting service..."
+    print_info "Enabling and starting service..."
     systemctl daemon-reload
     
     if ! systemctl enable "$CLOUDFLARED_SERVICE"; then
-        msg_warn "Failed to enable service"
+        print_warning "Failed to enable service"
         log_warn "systemctl enable failed"
     fi
     
     if ! systemctl start "$CLOUDFLARED_SERVICE"; then
-        msg_err "Failed to start cloudflared service"
+        print_error "Failed to start cloudflared service"
         log_error "systemctl start failed"
         journalctl -u "$CLOUDFLARED_SERVICE" --no-pager -n 20 >&2
         exit 1
@@ -461,10 +501,10 @@ configure_service() {
     # Verify service is running
     sleep 2
     if service_is_active "$CLOUDFLARED_SERVICE"; then
-        msg_ok "Cloudflared service is running"
+        print_success "Cloudflared service is running"
         log_ok "Service started successfully"
     else
-        msg_err "Service failed to start"
+        print_error "Service failed to start"
         log_error "Service not active after start"
         journalctl -u "$CLOUDFLARED_SERVICE" --no-pager -n 20 >&2
         exit 1
@@ -478,52 +518,52 @@ configure_service() {
 configure_ufw() {
     # Skip if requested
     if [[ "$CLOUDFLARED_SKIP_UFW" == "true" ]]; then
-        msg_info "Skipping UFW configuration (CLOUDFLARED_SKIP_UFW=true)"
+        print_info "Skipping UFW configuration (CLOUDFLARED_SKIP_UFW=true)"
         log_info "UFW configuration skipped by environment variable"
         return 0
     fi
     
     # Check if UFW is available and functional
     if ! command_exists ufw; then
-        msg_info "UFW not installed, skipping firewall configuration"
+        print_info "UFW not installed, skipping firewall configuration"
         log_info "UFW not found, skipping"
         return 0
     fi
     
     # Test UFW functionality (works even in unprivileged LXC)
     if ! ufw status &>/dev/null; then
-        msg_info "UFW not functional in this environment, skipping"
+        print_info "UFW not functional in this environment, skipping"
         log_info "UFW status check failed, skipping"
         return 0
     fi
     
-    header "Firewall Configuration"
+    print_header "Firewall Configuration"
     
-    msg_info "Cloudflared uses outbound HTTPS connections only."
-    msg_info "No inbound firewall rules are required."
+    print_info "Cloudflared uses outbound HTTPS connections only."
+    print_info "No inbound firewall rules are required."
     
     # Ensure outbound HTTPS is allowed (usually default)
     local ufw_status
     ufw_status=$(ufw status 2>/dev/null || echo "inactive")
     
     if echo "$ufw_status" | grep -q "Status: active"; then
-        msg_ok "UFW is active"
+        print_success "UFW is active"
         
         # Cloudflared needs outbound 443 and 7844 (QUIC)
         # Most UFW configs allow all outbound by default
         # Only add rules if specifically blocking outbound
         
         if ufw status verbose 2>/dev/null | grep -q "deny (outgoing)"; then
-            msg_info "Adding outbound rules for cloudflared..."
+            print_info "Adding outbound rules for cloudflared..."
             ufw allow out 443/tcp comment "Cloudflared HTTPS" 2>/dev/null || true
             ufw allow out 7844/udp comment "Cloudflared QUIC" 2>/dev/null || true
-            msg_ok "Outbound rules added"
+            print_success "Outbound rules added"
             log_info "Added UFW outbound rules for cloudflared"
         else
-            msg_ok "Default outbound policy allows cloudflared traffic"
+            print_success "Default outbound policy allows cloudflared traffic"
         fi
     else
-        msg_info "UFW is not active, no rules needed"
+        print_info "UFW is not active, no rules needed"
     fi
     
     log_info "UFW configuration completed"
@@ -581,11 +621,11 @@ EOF
 }
 
 show_status() {
-    header "Cloudflared Status"
+    print_header "Cloudflared Status"
     
     # Check if installed
     if ! command_exists cloudflared; then
-        msg_err "Cloudflared is not installed"
+        print_error "Cloudflared is not installed"
         exit 1
     fi
     
@@ -597,10 +637,10 @@ show_status() {
     # Service status
     echo "Service Status:"
     if service_is_active "$CLOUDFLARED_SERVICE"; then
-        msg_ok "cloudflared.service is running"
+        print_success "cloudflared.service is running"
         systemctl status "$CLOUDFLARED_SERVICE" --no-pager -l 2>/dev/null | head -20 || true
     else
-        msg_warn "cloudflared.service is not running"
+        print_warning "cloudflared.service is not running"
         systemctl status "$CLOUDFLARED_SERVICE" --no-pager 2>/dev/null | head -10 || true
     fi
     echo ""
@@ -608,7 +648,7 @@ show_status() {
     # Tunnel info (if available)
     echo "Tunnel Information:"
     if [[ -f "${CLOUDFLARED_CONFIG_DIR}/config.yml" ]]; then
-        msg_info "Configuration found at ${CLOUDFLARED_CONFIG_DIR}/config.yml"
+        print_info "Configuration found at ${CLOUDFLARED_CONFIG_DIR}/config.yml"
     fi
     
     # Connection status via metrics
@@ -621,14 +661,14 @@ show_status() {
 }
 
 show_logs() {
-    header "Cloudflared Logs"
+    print_header "Cloudflared Logs"
     
     local lines="${1:-50}"
     
     echo "Last $lines lines from cloudflared service:"
     echo ""
     journalctl -u "$CLOUDFLARED_SERVICE" --no-pager -n "$lines" 2>/dev/null || {
-        msg_err "Unable to retrieve logs"
+        print_error "Unable to retrieve logs"
         exit 1
     }
 }
@@ -636,14 +676,14 @@ show_logs() {
 reconfigure() {
     require_root
     
-    header "Reconfigure Cloudflare Tunnel"
+    print_header "Reconfigure Cloudflare Tunnel"
     
-    msg_warn "This will replace the current tunnel configuration."
+    print_warning "This will replace the current tunnel configuration."
     
     if ! is_silent; then
         read -rp "Continue? [y/N]: " confirm
         if [[ ! "$confirm" =~ ^[Yy] ]]; then
-            msg_info "Reconfiguration cancelled"
+            print_info "Reconfiguration cancelled"
             exit 0
         fi
     fi
@@ -657,45 +697,45 @@ reconfigure() {
     # Reconfigure service
     configure_service
     
-    msg_ok "Tunnel reconfigured successfully"
+    print_success "Tunnel reconfigured successfully"
     log_ok "Tunnel reconfigured"
 }
 
 uninstall() {
     require_root
     
-    header "Uninstall Cloudflared"
+    print_header "Uninstall Cloudflared"
     
-    msg_warn "This will remove cloudflared and all configuration."
+    print_warning "This will remove cloudflared and all configuration."
     
     if ! is_silent; then
         read -rp "Are you sure? [y/N]: " confirm
         if [[ ! "$confirm" =~ ^[Yy] ]]; then
-            msg_info "Uninstall cancelled"
+            print_info "Uninstall cancelled"
             exit 0
         fi
     fi
     
     # Stop and disable service
     if service_exists "$CLOUDFLARED_SERVICE"; then
-        msg_info "Stopping cloudflared service..."
+        print_info "Stopping cloudflared service..."
         systemctl stop "$CLOUDFLARED_SERVICE" 2>/dev/null || true
         systemctl disable "$CLOUDFLARED_SERVICE" 2>/dev/null || true
     fi
     
     # Uninstall service
     if command_exists cloudflared; then
-        msg_info "Uninstalling cloudflared service..."
+        print_info "Uninstalling cloudflared service..."
         cloudflared service uninstall 2>/dev/null || true
     fi
     
     # Remove package
-    msg_info "Removing cloudflared package..."
+    print_info "Removing cloudflared package..."
     apt-get remove --purge -y cloudflared 2>/dev/null || true
     apt-get autoremove -y 2>/dev/null || true
     
     # Clean up configuration
-    msg_info "Removing configuration files..."
+    print_info "Removing configuration files..."
     rm -rf "$CLOUDFLARED_CONFIG_DIR"
     rm -f /etc/apt/sources.list.d/cloudflared.list
     rm -f /usr/share/keyrings/cloudflare-main.gpg
@@ -703,7 +743,7 @@ uninstall() {
     # Update package lists
     apt-get update -qq 2>/dev/null || true
     
-    msg_ok "Cloudflared has been removed"
+    print_success "Cloudflared has been removed"
     log_ok "Cloudflared uninstalled successfully"
 }
 
@@ -712,7 +752,7 @@ uninstall() {
 # ─────────────────────────────────────────────────────────────────────────────
 
 show_summary() {
-    header "Installation Complete"
+    print_header "Installation Complete"
     
     local version
     version=$(cloudflared --version 2>/dev/null | head -1 || echo "unknown")
@@ -728,7 +768,7 @@ show_summary() {
     echo "    $0 --configure   Reconfigure tunnel"
     echo "    $0 --uninstall   Remove cloudflared"
     echo ""
-    msg_info "Configure your tunnel routes in the Cloudflare Zero Trust dashboard"
+    print_info "Configure your tunnel routes in the Cloudflare Zero Trust dashboard"
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -766,7 +806,7 @@ main() {
             # No flag - proceed with installation
             ;;
         *)
-            msg_err "Unknown option: $1"
+            print_error "Unknown option: $1"
             echo "Use --help for usage information"
             exit 1
             ;;
@@ -779,8 +819,8 @@ main() {
     setup_logging
     log_info "Starting ${SCRIPT_NAME} installation v${SCRIPT_VERSION}"
     
-    # Show header
-    header "Cloudflare Tunnel Setup"
+    # Show print_header
+    print_header "Cloudflare Tunnel Setup"
     echo "  Target:  Debian 13 LXC/VM"
     echo "  Version: ${SCRIPT_VERSION}"
     echo ""

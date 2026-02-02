@@ -2,7 +2,7 @@
 <p align="center">
   <a href="https://github.com/vdarkobar/lab/tree/main/misc/Proxmox.md">Proxmox &gt;</a>
   <a href="https://github.com/vdarkobar/lab/tree/main/misc/Debian.md">Debian VM/LXC &gt;</a>
-  <a href="https://github.com/vdarkobar/lab/tree/main/misc/Apps.md">App</a>
+  <a href="https://github.com/vdarkobar/lab/tree/main/misc/Apps.md">*App*</a>
 </p>
   
 #### *Install <a href="https://github.com/vdarkobar/cloud/blob/main/all/debvm/setup.md"> * </a>*:

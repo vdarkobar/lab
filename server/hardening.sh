@@ -39,7 +39,8 @@ case "${1:-}" in
         echo
         echo "Available apps (via menu):"
         echo "  - Docker + Compose v2"
-        echo "  - Nginx Proxy Manager"
+        echo "  - Nginx Proxy Manager (native)"
+        echo "  - Nginx Proxy Manager (Docker)"
         echo "  - Cloudflare Tunnel"
         echo "  - Unbound DNS"
         echo "  - Samba File Server"
@@ -269,7 +270,8 @@ trap cleanup EXIT
 # Format: "display_name|script_name|detection_command"
 readonly APP_REGISTRY=(
     "Docker|docker.sh|command -v docker >/dev/null 2>&1"
-    "Nginx Proxy Manager|npm.sh|systemctl is-active --quiet openresty || systemctl is-active --quiet nginx-proxy-manager"
+    "Nginx Proxy Manager (native)|npm.sh|systemctl is-active --quiet openresty || systemctl is-active --quiet nginx-proxy-manager"
+    "Nginx Proxy Manager (Docker)|npm-docker.sh|[[ -f \$HOME/npm/docker-compose.yml ]]"
     "Cloudflare Tunnel|cloudflared.sh|systemctl is-active --quiet cloudflared"
     "Unbound DNS|unbound.sh|systemctl is-active --quiet unbound"
     "Samba File Server|samba.sh|systemctl is-active --quiet smbd"

@@ -354,19 +354,32 @@ verify_checksums() {
     local verification_failed=false
     local verified_count=0
     local skipped_count=0
+    local unverified_count=0
     
+    # Build list of files that have checksums
+    local -a checksum_files=()
+    while IFS= read -r line; do
+        [[ "$line" =~ ^#.*$ ]] && continue
+        [[ -z "$line" ]] && continue
+        local file_path=$(echo "$line" | awk '{print $2}')
+        checksum_files+=("$file_path")
+    done < CHECKSUMS.txt
+    
+    # Verify files listed in CHECKSUMS.txt
     while IFS= read -r line; do
         # Skip comments and empty lines
         [[ "$line" =~ ^#.*$ ]] && continue
         [[ -z "$line" ]] && continue
         
         # Parse checksum line: "hash  filename"
-        # Combined local+assignment masks exit codes (intentional with set -e)
         local expected_hash=$(echo "$line" | awk '{print $1}')
         local file_path=$(echo "$line" | awk '{print $2}')
         
         # Skip if file doesn't exist (optional files)
-        [[ ! -f "$file_path" ]] && { ((skipped_count++)) || true; continue; }
+        if [[ ! -f "$file_path" ]]; then
+            ((skipped_count++)) || true
+            continue
+        fi
         
         print_step "Verifying $file_path..."
         
@@ -383,15 +396,55 @@ verify_checksums() {
         fi
     done < CHECKSUMS.txt
     
+    # Check for downloaded files not in CHECKSUMS.txt
+    local downloaded_files=(
+        "lib/formatting.sh"
+        "lib/helpers.sh"
+        "server/hardening.sh"
+        "server/jump.sh"
+        "pve/debvm.sh"
+        "pve/deblxc.sh"
+        "apps/docker.sh"
+        "apps/npm.sh"
+        "apps/npm-docker.sh"
+        "apps/cloudflared.sh"
+        "apps/unbound.sh"
+        "apps/samba.sh"
+        "apps/bookstack.sh"
+        "apps/bentopdf.sh"
+    )
+    
+    for file_path in "${downloaded_files[@]}"; do
+        # Skip if file wasn't downloaded
+        [[ ! -f "$file_path" ]] && continue
+        
+        # Check if file is in checksum list
+        local found=false
+        for checksum_file in "${checksum_files[@]}"; do
+            if [[ "$checksum_file" == "$file_path" ]]; then
+                found=true
+                break
+            fi
+        done
+        
+        if [[ "$found" == false ]]; then
+            print_warning "$file_path: NO CHECKSUM (not in CHECKSUMS.txt)"
+            ((unverified_count++)) || true
+        fi
+    done
+    
     echo
     
     if [[ "$verification_failed" == true ]]; then
         die "Checksum verification failed! Installation aborted."
     fi
     
-    print_success "All checksums verified"
+    print_success "All verified checksums passed"
     print_kv "Files verified" "$verified_count"
     print_kv "Files skipped" "$skipped_count"
+    if [[ $unverified_count -gt 0 ]]; then
+        print_kv "Files unverified" "$unverified_count"
+    fi
     
     echo
 }

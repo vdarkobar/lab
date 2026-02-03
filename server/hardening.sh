@@ -4,7 +4,7 @@
 # Debian 13 VM/LXC Server Hardening Script                                  #
 #############################################################################
 
-readonly SCRIPT_VERSION="2.3.0"
+readonly SCRIPT_VERSION="2.5.0"
 
 # Handle --help flag early (before defining functions)
 case "${1:-}" in
@@ -30,11 +30,12 @@ case "${1:-}" in
         echo "  - Offers app installation menu (Docker, NPM, Unbound, etc.)"
         echo
         echo "Files created:"
-        echo "  /var/log/hardening-*.log                    Installation log"
-        echo "  /root/hardening-backups-*/                  Config backups"
+        echo "  /var/log/hardening-*.log                        Installation log"
+        echo "  /root/hardening-backups-*/                      Config backups"
         echo "  /etc/ssh/sshd_config.d/99-lab-hardening.conf    SSH hardening"
         echo "  /etc/fail2ban/jail.d/99-lab-hardening.conf      Fail2Ban config"
         echo "  /etc/sysctl.d/99-lab-hardening.conf             Sysctl hardening"
+        echo "  /etc/apt/apt.conf.d/52lab-unattended-upgrades   Auto-updates config"
         echo
         echo "Available apps (via menu):"
         echo "  - Docker + Compose v2"
@@ -214,7 +215,14 @@ log() {
     local level="$1"
     shift
     local message="$*"
+    local timestamp=$(date +"%Y-%m-%d %H:%M:%S")
     
+    # Write plain text to log file (strip ANSI color codes)
+    if [[ -n "${LOG_FILE:-}" ]] && [[ -w "${LOG_FILE:-}" || -w "$(dirname "${LOG_FILE:-/tmp}")" ]]; then
+        echo "[$timestamp] [$level] $message" | sed 's/\x1b\[[0-9;]*m//g' >> "$LOG_FILE" 2>/dev/null || true
+    fi
+    
+    # Display to console with formatting
     case "$level" in
         SUCCESS) print_success "$message" ;;
         ERROR)   print_error "$message" ;;
@@ -398,13 +406,13 @@ preflight_checks() {
     # Check internet connectivity (use HTTP instead of ICMP for container compatibility)
     print_step "Testing internet connectivity..."
     if command -v curl >/dev/null 2>&1; then
-        if curl -s --max-time 5 --head https://www.google.com >/dev/null 2>&1; then
+        if curl -s --max-time 5 --head https://deb.debian.org >/dev/null 2>&1; then
             print_success "Internet connectivity verified (via curl)"
         else
             die "No internet connectivity detected (curl test failed)"
         fi
     elif command -v wget >/dev/null 2>&1; then
-        if wget -q --timeout=5 --spider https://www.google.com 2>/dev/null; then
+        if wget -q --timeout=5 --spider https://deb.debian.org 2>/dev/null; then
             print_success "Internet connectivity verified (via wget)"
         else
             die "No internet connectivity detected (wget test failed)"
@@ -638,7 +646,8 @@ install_packages() {
         cloud-initramfs-growroot
     )
     
-    print_step "Installing packages: ${C_DIM}${packages[*]}${C_RESET}"
+    print_step "Installing packages (1-2 minutes)..."
+    print_subheader "${C_DIM}${packages[*]}${C_RESET}"
     if ! sudo DEBIAN_FRONTEND=noninteractive apt install -y "${packages[@]}" >/dev/null 2>&1; then
         die "Failed to install packages"
     fi
@@ -665,8 +674,8 @@ configure_hosts() {
         echo "ff02::1         ip6-allnodes"
         echo "ff02::2         ip6-allrouters"
         echo ""
-        echo "# Host configuration"
-        echo "$LOCAL_IP       $HOSTNAME $HOSTNAME.$DOMAIN_LOCAL"
+        echo "# Host configuration (FQDN first, then shortname)"
+        echo "$LOCAL_IP       $HOSTNAME.$DOMAIN_LOCAL $HOSTNAME"
         echo ""
         echo "# Existing entries (if any)"
         grep -v -E '^(127\.0\.0\.1|::1|ff02::|#.*|^$)' /etc/hosts 2>/dev/null | \
@@ -700,24 +709,24 @@ configure_unattended_upgrades() {
         die "Failed to enable unattended-upgrades"
     fi
     
-    local config_file="/etc/apt/apt.conf.d/50unattended-upgrades"
+    # Use drop-in file instead of modifying vendor config (survives package upgrades)
+    local dropin_file="/etc/apt/apt.conf.d/52lab-unattended-upgrades"
     
-    if [[ ! -f "$config_file" ]]; then
-        print_warning "Configuration file not found, skipping advanced options"
-        return
-    fi
+    print_step "Creating unattended-upgrades drop-in configuration..."
     
-    backup_file "$config_file"
+    # Write drop-in config (overwrites if exists - idempotent)
+    sudo tee "$dropin_file" > /dev/null << 'EOF'
+// Managed by lab/hardening.sh - do not edit manually
+// Overrides settings in 50unattended-upgrades
+
+Unattended-Upgrade::Remove-Unused-Kernel-Packages "true";
+Unattended-Upgrade::Remove-New-Unused-Dependencies "true";
+Unattended-Upgrade::Remove-Unused-Dependencies "true";
+Unattended-Upgrade::Automatic-Reboot "true";
+Unattended-Upgrade::Automatic-Reboot-Time "02:00";
+EOF
     
-    print_step "Configuring automatic cleanup and reboot..."
-    # Configure options
-    sudo sed -i 's|//Unattended-Upgrade::Remove-Unused-Kernel-Packages "true";|Unattended-Upgrade::Remove-Unused-Kernel-Packages "true";|g' "$config_file"
-    sudo sed -i 's|//Unattended-Upgrade::Remove-New-Unused-Dependencies "true";|Unattended-Upgrade::Remove-New-Unused-Dependencies "true";|g' "$config_file"
-    sudo sed -i 's|//Unattended-Upgrade::Remove-Unused-Dependencies "false";|Unattended-Upgrade::Remove-Unused-Dependencies "true";|g' "$config_file"
-    sudo sed -i 's|//Unattended-Upgrade::Automatic-Reboot "false";|Unattended-Upgrade::Automatic-Reboot "true";|g' "$config_file"
-    sudo sed -i 's|//Unattended-Upgrade::Automatic-Reboot-Time "02:00";|Unattended-Upgrade::Automatic-Reboot-Time "02:00";|g' "$config_file"
-    
-    log SUCCESS "Automatic security updates enabled"
+    log SUCCESS "Unattended-upgrades drop-in config created: $dropin_file"
     print_info "System will automatically reboot at 02:00 if needed"
     echo
 }
@@ -813,31 +822,6 @@ configure_ufw() {
 }
 
 #################################################################
-# Secure Shared Memory                                           #
-#################################################################
-
-secure_shared_memory() {
-    print_header "Securing Shared Memory"
-    
-    if [[ "$IS_CONTAINER" == "true" ]]; then
-        print_warning "Skipping shared memory hardening in container environment"
-        echo
-        return
-    fi
-    
-    backup_file "/etc/fstab"
-    
-    # Check if entry already exists
-    if grep -q '/run/shm' /etc/fstab; then
-        print_info "Shared memory already configured in fstab"
-    else
-        echo "none /run/shm tmpfs defaults,ro 0 0" | sudo tee -a /etc/fstab > /dev/null
-        log SUCCESS "Shared memory secured"
-    fi
-    echo
-}
-
-#################################################################
 # Configure Sysctl (Network Security)                            #
 #################################################################
 
@@ -854,9 +838,8 @@ configure_sysctl() {
 # Managed by lab/hardening.sh - do not edit manually
 # Network security hardening settings
 
-# IP Forwarding (disable unless this is a router)
-net.ipv4.ip_forward = 0
-net.ipv6.conf.all.forwarding = 0
+# Note: ip_forward not disabled here (breaks Docker/WireGuard)
+# Add manually if this server will never need forwarding
 
 # Reverse path filtering
 net.ipv4.conf.default.rp_filter = 1
@@ -905,7 +888,7 @@ configure_ssh_keys() {
     print_header "Configuring SSH Key Authentication"
     
     local user=$(whoami)
-    local ssh_dir="/home/$user/.ssh"
+    local ssh_dir="$HOME/.ssh"
     local auth_keys="$ssh_dir/authorized_keys"
     
     # Create .ssh directory if it doesn't exist
@@ -938,9 +921,19 @@ configure_ssh_keys() {
         echo -n "${C_CYAN}Public Key: ${C_RESET}"
         read -r public_key
         
+        # Trim leading/trailing whitespace
+        public_key=$(echo "$public_key" | xargs)
+        
         # Check if input is empty
         if [[ -z "$public_key" ]]; then
             print_error "No input received"
+            continue
+        fi
+        
+        # Check if user accidentally pasted a private key
+        if [[ "$public_key" == *"-----BEGIN"* ]] || [[ "$public_key" == *"PRIVATE KEY"* ]]; then
+            print_error "That looks like a PRIVATE key! Never share your private key."
+            print_info "Paste your PUBLIC key (usually from ~/.ssh/id_ed25519.pub)"
             continue
         fi
         
@@ -1172,14 +1165,20 @@ show_app_menu() {
         echo -n "${C_CYAN}${C_BOLD}Select application to install [1-$((app_count + 1))]:${C_RESET} "
         read -r selection
         
+        # Validate numeric input first (before any integer comparisons)
+        if [[ ! "$selection" =~ ^[0-9]+$ ]]; then
+            print_error "Invalid selection. Enter a number."
+            continue
+        fi
+        
         # Check if user wants to skip
         if [[ "$selection" -eq $((app_count + 1)) ]]; then
             print_info "Skipping application installation"
             return 1
         fi
         
-        # Validate selection
-        if [[ "$selection" =~ ^[0-9]+$ ]] && [[ "$selection" -ge 1 ]] && [[ "$selection" -le $app_count ]]; then
+        # Validate selection range
+        if [[ "$selection" -ge 1 ]] && [[ "$selection" -le $app_count ]]; then
             # Get selected app
             local selected_app="${available_apps[$((selection - 1))]}"
             IFS='|' read -r display_name script_name detection_cmd <<< "$selected_app"
@@ -1272,8 +1271,11 @@ download_and_install_app() {
     local display_name="$2"
     local script_url="${APPS_BASE_URL}/${script_name}"
     local tmp_script="/tmp/app-install-$RANDOM.sh"
-    local checksums_file="${SCRIPT_DIR}/../CHECKSUMS.txt"
     local checksum_verified=false
+    
+    # Remote checksums URL
+    local checksums_url="https://raw.githubusercontent.com/vdarkobar/lab/main/CHECKSUMS.txt"
+    local tmp_checksums="/tmp/checksums-$RANDOM.txt"
     
     print_header "Installing: $display_name (downloading)"
     
@@ -1289,14 +1291,15 @@ download_and_install_app() {
     local file_size=$(stat -c%s "$tmp_script" 2>/dev/null || stat -f%z "$tmp_script" 2>/dev/null || echo "unknown")
     print_success "Script downloaded (${file_size} bytes)"
     
-    # Try to verify using CHECKSUMS.txt
-    print_step "Looking for checksum..."
+    # Download checksums from repo for verification
+    print_step "Downloading checksums for verification..."
     
-    if [[ -f "$checksums_file" ]]; then
-        print_success "Found CHECKSUMS.txt"
+    if curl -fsSL "$checksums_url" -o "$tmp_checksums" 2>/dev/null; then
+        print_success "Downloaded CHECKSUMS.txt from repository"
         
-        # Extract expected hash for this script from CHECKSUMS.txt
-        local expected_hash=$(grep "apps/${script_name}" "$checksums_file" | grep -v '^#' | awk '{print $1}')
+        # Extract expected hash for this script
+        local expected_hash=$(grep "apps/${script_name}" "$tmp_checksums" | grep -v '^#' | awk '{print $1}')
+        rm -f "$tmp_checksums"
         
         if [[ -n "$expected_hash" ]]; then
             local actual_hash=$(sha256sum "$tmp_script" | awk '{print $1}')
@@ -1314,11 +1317,10 @@ download_and_install_app() {
             fi
         else
             print_warning "No checksum found in CHECKSUMS.txt for ${script_name}"
-            checksum_verified=false
         fi
     else
-        print_warning "CHECKSUMS.txt not found at ${C_DIM}${checksums_file}${C_RESET}"
-        checksum_verified=false
+        print_warning "Failed to download CHECKSUMS.txt from repository"
+        rm -f "$tmp_checksums"
     fi
     
     # If no checksum verification, ask user
@@ -1471,7 +1473,6 @@ main() {
     configure_unattended_upgrades
     configure_fail2ban
     configure_ufw
-    secure_shared_memory
     configure_sysctl
     configure_ssh_keys
     lock_root_account

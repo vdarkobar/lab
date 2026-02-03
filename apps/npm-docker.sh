@@ -59,9 +59,6 @@ set -euo pipefail
 # Secure file creation by default
 umask 077
 
-# Error trap for better debugging
-trap 'print_error "Error on line $LINENO: $BASH_COMMAND" >&2' ERR
-
 # Track services we stop (to restart later)
 UNATTENDED_UPGRADES_WAS_ACTIVE=false
 
@@ -69,75 +66,161 @@ UNATTENDED_UPGRADES_WAS_ACTIVE=false
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 #############################################################################
-# Load Formatting Library                                                   #
+# Terminal Formatting (embedded from formatting.sh)                         #
 #############################################################################
 
-FORMATTING_LOADED=false
-
-# Try multiple locations for formatting library
-for lib_path in \
-    "$SCRIPT_DIR/../lib/formatting.sh" \
-    "$SCRIPT_DIR/lib/formatting.sh" \
-    "/opt/lab/lib/formatting.sh"; do
-    if [[ -f "$lib_path" ]]; then
-        source "$lib_path"
-        FORMATTING_LOADED=true
-        break
-    fi
-done
-
-# Inline fallback if formatting library not found
-if [[ "$FORMATTING_LOADED" == false ]]; then
-    # Minimal formatting fallback (matches formatting.sh structure)
-    C_RESET='\033[0m'
-    C_BOLD='\033[1m'
-    C_DIM='\033[2m'
-    C_RED='\033[0;31m'
-    C_GREEN='\033[0;32m'
-    C_YELLOW='\033[0;33m'
-    C_BLUE='\033[0;34m'
-    C_CYAN='\033[0;36m'
-    C_WHITE='\033[0;37m'
+# Check if terminal supports colors
+if [[ -t 1 ]] && command -v tput >/dev/null 2>&1 && tput setaf 1 >/dev/null 2>&1; then
+    COLORS_SUPPORTED=true
     
-    # Symbols
-    SYMBOL_SUCCESS="✓"
-    SYMBOL_ERROR="✗"
-    SYMBOL_WARNING="⚠"
-    SYMBOL_INFO="ℹ"
-    SYMBOL_ARROW="→"
-    SYMBOL_BULLET="•"
+    # Colors
+    readonly C_RESET=$(tput sgr0)
+    readonly C_BOLD=$(tput bold)
+    readonly C_DIM=$(tput dim)
     
-    print_header()    { echo -e "\n${C_BOLD}${C_CYAN}━━━ $* ━━━${C_RESET}"; }
-    print_step()      { echo -e "${C_CYAN}${C_BOLD}${SYMBOL_ARROW}${C_RESET} ${C_CYAN}$*${C_RESET}"; }
-    print_success()   { echo -e "${C_GREEN}${C_BOLD}${SYMBOL_SUCCESS}${C_RESET} ${C_GREEN}$*${C_RESET}"; }
-    print_error()     { echo -e "${C_RED}${C_BOLD}${SYMBOL_ERROR}${C_RESET} ${C_RED}$*${C_RESET}" >&2; }
-    print_warning()   { echo -e "${C_YELLOW}${C_BOLD}${SYMBOL_WARNING}${C_RESET} ${C_YELLOW}$*${C_RESET}"; }
-    print_info()      { echo -e "${C_BLUE}${C_BOLD}${SYMBOL_INFO}${C_RESET} ${C_BLUE}$*${C_RESET}"; }
-    print_subheader() { echo -e "${C_DIM}${SYMBOL_BULLET} $*${C_RESET}"; }
-    print_kv()        { printf "${C_CYAN}%-20s${C_RESET} ${C_WHITE}%s${C_RESET}\n" "$1:" "$2"; }
-    draw_box() {
-        local text="$1"
-        local width=68
-        local padding=$(( (width - ${#text} - 2) / 2 ))
-        echo -e "${C_CYAN}"
-        echo "╔$(printf '═%.0s' $(seq 1 $width))╗"
-        printf "║%*s%s%*s║\n" $padding "" "$text" $padding ""
-        echo "╚$(printf '═%.0s' $(seq 1 $width))╝"
-        echo -e "${C_RESET}"
-    }
-    draw_separator()  { echo -e "${C_DIM}$(printf '─%.0s' $(seq 1 70))${C_RESET}"; }
-    log() {
-        local level="$1"; shift
-        case "$level" in
-            SUCCESS) print_success "$*" ;;
-            ERROR)   print_error "$*" ;;
-            WARN)    print_warning "$*" ;;
-            INFO)    print_info "$*" ;;
-            *)       echo "$*" ;;
-        esac
-    }
-    die() { print_error "$*"; exit 1; }
+    # Foreground colors
+    readonly C_BLACK=$(tput setaf 0)
+    readonly C_RED=$(tput setaf 1)
+    readonly C_GREEN=$(tput setaf 2)
+    readonly C_YELLOW=$(tput setaf 3)
+    readonly C_BLUE=$(tput setaf 4)
+    readonly C_MAGENTA=$(tput setaf 5)
+    readonly C_CYAN=$(tput setaf 6)
+    readonly C_WHITE=$(tput setaf 7)
+    
+    # Bright colors (if supported)
+    readonly C_BRIGHT_GREEN=$(tput setaf 10 2>/dev/null || tput setaf 2)
+    readonly C_BRIGHT_RED=$(tput setaf 9 2>/dev/null || tput setaf 1)
+    readonly C_BRIGHT_YELLOW=$(tput setaf 11 2>/dev/null || tput setaf 3)
+    readonly C_BRIGHT_BLUE=$(tput setaf 12 2>/dev/null || tput setaf 4)
+else
+    COLORS_SUPPORTED=false
+    readonly C_RESET=""
+    readonly C_BOLD=""
+    readonly C_DIM=""
+    readonly C_BLACK=""
+    readonly C_RED=""
+    readonly C_GREEN=""
+    readonly C_YELLOW=""
+    readonly C_BLUE=""
+    readonly C_MAGENTA=""
+    readonly C_CYAN=""
+    readonly C_WHITE=""
+    readonly C_BRIGHT_GREEN=""
+    readonly C_BRIGHT_RED=""
+    readonly C_BRIGHT_YELLOW=""
+    readonly C_BRIGHT_BLUE=""
 fi
+
+# Unicode symbols (with ASCII fallbacks)
+if [[ "${LANG:-}" =~ UTF-8 ]] || [[ "${LC_ALL:-}" =~ UTF-8 ]]; then
+    readonly SYMBOL_SUCCESS="✓"
+    readonly SYMBOL_ERROR="✗"
+    readonly SYMBOL_WARNING="⚠"
+    readonly SYMBOL_INFO="ℹ"
+    readonly SYMBOL_ARROW="→"
+    readonly SYMBOL_BULLET="•"
+else
+    readonly SYMBOL_SUCCESS="+"
+    readonly SYMBOL_ERROR="x"
+    readonly SYMBOL_WARNING="!"
+    readonly SYMBOL_INFO="i"
+    readonly SYMBOL_ARROW=">"
+    readonly SYMBOL_BULLET="*"
+fi
+
+#############################################################################
+# Output Functions                                                          #
+#############################################################################
+
+print_success() {
+    local msg="$*"
+    echo "${C_BRIGHT_GREEN}${C_BOLD}${SYMBOL_SUCCESS}${C_RESET} ${C_GREEN}${msg}${C_RESET}"
+}
+
+print_error() {
+    local msg="$*"
+    echo "${C_BRIGHT_RED}${C_BOLD}${SYMBOL_ERROR}${C_RESET} ${C_RED}${msg}${C_RESET}" >&2
+}
+
+print_warning() {
+    local msg="$*"
+    echo "${C_BRIGHT_YELLOW}${C_BOLD}${SYMBOL_WARNING}${C_RESET} ${C_YELLOW}${msg}${C_RESET}"
+}
+
+print_info() {
+    local msg="$*"
+    echo "${C_BRIGHT_BLUE}${C_BOLD}${SYMBOL_INFO}${C_RESET} ${C_BLUE}${msg}${C_RESET}"
+}
+
+print_step() {
+    local msg="$*"
+    echo "${C_CYAN}${C_BOLD}${SYMBOL_ARROW}${C_RESET} ${C_CYAN}${msg}${C_RESET}"
+}
+
+print_header() {
+    local msg="$*"
+    echo
+    echo "${C_BOLD}${C_CYAN}━━━ ${msg} ━━━${C_RESET}"
+}
+
+print_subheader() {
+    local msg="$*"
+    echo "${C_DIM}${SYMBOL_BULLET} ${msg}${C_RESET}"
+}
+
+print_kv() {
+    local key="$1"
+    local value="$2"
+    printf "${C_CYAN}%-20s${C_RESET} ${C_WHITE}%s${C_RESET}\n" "$key:" "$value"
+}
+
+#############################################################################
+# Visual Elements                                                           #
+#############################################################################
+
+draw_box() {
+    local text="$1"
+    local width=68
+    local padding=$(( (width - ${#text} - 2) / 2 ))
+    
+    echo "${C_CYAN}"
+    echo "╔$(printf '═%.0s' $(seq 1 $width))╗"
+    printf "║%*s%s%*s║\n" $padding "" "$text" $padding ""
+    echo "╚$(printf '═%.0s' $(seq 1 $width))╝"
+    echo "${C_RESET}"
+}
+
+draw_separator() {
+    echo "${C_DIM}$(printf '─%.0s' $(seq 1 70))${C_RESET}"
+}
+
+#############################################################################
+# Logging                                                                   #
+#############################################################################
+
+log() {
+    local level="$1"
+    shift
+    local message="$*"
+    
+    case "$level" in
+        SUCCESS) print_success "$message" ;;
+        ERROR)   print_error "$message" ;;
+        WARN)    print_warning "$message" ;;
+        INFO)    print_info "$message" ;;
+        STEP)    print_step "$message" ;;
+        *)       echo "$message" ;;
+    esac
+}
+
+die() {
+    print_error "$@"
+    exit 1
+}
+
+# Error trap for better debugging (set after print_error is defined)
+trap 'print_error "Error on line $LINENO: $BASH_COMMAND"' ERR
 
 #############################################################################
 # Configuration Variables                                                   #
@@ -978,6 +1061,41 @@ main() {
     [[ "${BASH_SOURCE[0]}" == "${0}" ]] && clear || true
     
     draw_box "Nginx Proxy Manager Installer v${SCRIPT_VERSION}"
+    
+    # Check if NPM directory already exists
+    if [[ -d "$HOME/npm" ]]; then
+        echo
+        print_warning "NPM directory already exists: ~/npm"
+        echo
+        
+        # Check if it's a complete installation
+        if [[ -f "$HOME/npm/docker-compose.yml" ]]; then
+            print_header "Management Commands"
+            printf "  %b\n" "${C_DIM}# View status${C_RESET}"
+            printf "  %b\n" "${C_CYAN}cd ~/npm && sudo docker compose ps${C_RESET}"
+            echo
+            printf "  %b\n" "${C_DIM}# View logs${C_RESET}"
+            printf "  %b\n" "${C_CYAN}cd ~/npm && sudo docker compose logs -f${C_RESET}"
+            echo
+            printf "  %b\n" "${C_DIM}# Restart stack${C_RESET}"
+            printf "  %b\n" "${C_CYAN}cd ~/npm && sudo docker compose restart${C_RESET}"
+            echo
+            printf "  %b\n" "${C_DIM}# Update containers${C_RESET}"
+            printf "  %b\n" "${C_CYAN}cd ~/npm && sudo docker compose pull && sudo docker compose up -d${C_RESET}"
+            echo
+            printf "  %b\n" "${C_DIM}# Edit configuration${C_RESET}"
+            printf "  %b\n" "${C_CYAN}nano ~/npm/.env${C_RESET}"
+        else
+            print_warning "Incomplete installation detected (missing docker-compose.yml)"
+        fi
+        
+        echo
+        print_info "To reinstall, first remove the existing installation:"
+        printf "  %b\n" "${C_CYAN}cd ~ && sudo docker compose -f ~/npm/docker-compose.yml down 2>/dev/null; sudo rm -rf ~/npm${C_RESET}"
+        printf "  %b\n" "${C_CYAN}./npm.sh${C_RESET}"
+        echo
+        exit 0
+    fi
     
     # Run installation steps
     preflight_checks

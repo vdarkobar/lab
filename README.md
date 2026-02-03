@@ -21,7 +21,9 @@ sha256sum -c bootstrap.sh.sha256
 chmod +x bootstrap.sh && \
 ./bootstrap.sh  
 ```
+
 <br>
+
 <pre>
 <a href="https://github.com/vdarkobar/lab/tree/main/misc/Bootstrap.md">bootstrap.sh</a>
 │

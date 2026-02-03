@@ -2,7 +2,8 @@
 <p align="center">
   <em>
     <a href="https://github.com/vdarkobar/lab/tree/main/misc/Proxmox.md">Proxmox</a> > 
-    <a href="https://github.com/vdarkobar/lab/tree/main/misc/Debian.md">Debian VM / LXC</a> 
+    <a href="https://github.com/vdarkobar/lab/tree/main/misc/Debian.md">Debian VM/LXC</a> > 
+    <a href="https://github.com/vdarkobar/lab/tree/main/misc/Apps.md">App</a>
   </em>
 </p>
   
@@ -11,21 +12,17 @@
 # Quick Install (convenient):
 bash -c "$(wget -qLO - https://raw.githubusercontent.com/vdarkobar/lab/main/bootstrap.sh)"
 ```
-
 ```bash
 # Verified Install (recomended):
 wget https://raw.githubusercontent.com/vdarkobar/lab/main/bootstrap.sh
 wget https://raw.githubusercontent.com/vdarkobar/lab/main/bootstrap.sh.sha256
 sha256sum -c bootstrap.sh.sha256
 ```
-
 ```bash
 chmod +x bootstrap.sh
 ./bootstrap.sh  
 ```
-
 <br>
-
 <pre>
 <a href="https://github.com/vdarkobar/lab/tree/main/misc/Bootstrap.md">bootstrap.sh</a>
 │
@@ -38,12 +35,13 @@ chmod +x bootstrap.sh
                                   ▼
                              App Menu
                              ├── 1) <a href="https://github.com/vdarkobar/lab/tree/main/misc/Docker.md">Docker</a>
-                             ├── 2) <a href="https://github.com/vdarkobar/lab/tree/main/misc/NginxProxyManager.md">Nginx Proxy Manager</a>
-                             ├── 3) <a href="https://github.com/vdarkobar/lab/tree/main/misc/Cloudflared.md">Cloudflared</a>
-                             ├── 4) <a href="https://github.com/vdarkobar/lab/tree/main/misc/UnboundDNS.md">Unbound DNS</a> ──┐
-                             ├── 5) <a href="https://github.com/vdarkobar/lab/tree/main/misc/SambaFileServer.md">Samba File Server</a>
-                             ├── 6) <a href="https://github.com/vdarkobar/lab/tree/main/misc/BookStack.md">BookStack</a>     │
-                             ├── 7) <a href="https://github.com/vdarkobar/lab/tree/main/misc/BentoPDF.md">BentoPDF</a>      │
+                             ├── 2) <a href="https://github.com/vdarkobar/lab/tree/main/misc/NginxProxyManager.md">Nginx Proxy Manager (native)</a>
+                             ├── 3) <a href="https://github.com/vdarkobar/lab/tree/main/misc/NginxProxyManagerDocker.md">Nginx Proxy Manager (Docker)</a>
+                             ├── 4) <a href="https://github.com/vdarkobar/lab/tree/main/misc/Cloudflared.md">Cloudflared</a>
+                             ├── 5) <a href="https://github.com/vdarkobar/lab/tree/main/misc/UnboundDNS.md">Unbound DNS</a> ──┐
+                             ├── 6) <a href="https://github.com/vdarkobar/lab/tree/main/misc/SambaFileServer.md">Samba File Server</a>
+                             ├── 7) <a href="https://github.com/vdarkobar/lab/tree/main/misc/BookStack.md">BookStack</a>     │
+                             ├── 8) <a href="https://github.com/vdarkobar/lab/tree/main/misc/BentoPDF.md">BentoPDF</a>      │
                              └── N) Done          │
                                                   ▼
                                              Config Menu

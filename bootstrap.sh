@@ -27,68 +27,220 @@
 #   https://github.com/vdarkobar/lab/blob/main/bootstrap.sh                 #
 #############################################################################
 
-set -euo pipefail
+readonly SCRIPT_VERSION="1.1.0"
 
-#################################################################
-# Configuration                                                 #
-#################################################################
+# Handle --help flag early (before any setup)
+case "${1:-}" in
+    --help|-h)
+        echo "Lab Bootstrap Script v${SCRIPT_VERSION}"
+        echo
+        echo "Usage: $0 [--help]"
+        echo
+        echo "Installation methods:"
+        echo "  Quick:  bash -c \"\$(wget -qLO - https://raw.githubusercontent.com/vdarkobar/lab/main/bootstrap.sh)\""
+        echo "  Secure: Download, verify checksum, then run"
+        echo
+        echo "What it does:"
+        echo "  - Creates directory structure: ~/lab/{lib,server,apps,pve}"
+        echo "  - Downloads all components from GitHub"
+        echo "  - Verifies SHA256 checksums for security"
+        echo "  - Presents menu to run setup scripts"
+        echo
+        echo "Menu options:"
+        echo "  1) Create Debian VM Template  - runs on PVE host"
+        echo "  2) Create Debian LXC Template - runs on PVE host"
+        echo "  3) Harden Debian System       - runs in VM/LXC"
+        echo "  4) Setup Jump Server          - runs in VM/LXC"
+        echo
+        echo "Requirements:"
+        echo "  - wget or curl for downloads"
+        echo "  - sha256sum for verification"
+        echo "  - Internet connectivity"
+        echo
+        echo "Repository: https://github.com/vdarkobar/lab"
+        exit 0
+        ;;
+esac
+
+#############################################################################
+# Script Configuration                                                      #
+#############################################################################
+
+set -euo pipefail
 
 readonly REPO_URL="https://raw.githubusercontent.com/vdarkobar/lab/main"
 readonly INSTALL_DIR="$HOME/lab"
-readonly VERSION="1.1.0"
 
-# Simple colors (no dependencies)
-readonly C_GREEN='\033[0;32m'
-readonly C_RED='\033[0;31m'
-readonly C_YELLOW='\033[0;33m'
-readonly C_BLUE='\033[0;34m'
-readonly C_CYAN='\033[0;36m'
-readonly C_RESET='\033[0m'
+#############################################################################
+# Terminal Formatting                                                       #
+#############################################################################
 
-#################################################################
-# Helper Functions                                              #
-#################################################################
+# Check if terminal supports colors
+if [[ -t 1 ]] && command -v tput >/dev/null 2>&1 && tput setaf 1 >/dev/null 2>&1; then
+    COLORS_SUPPORTED=true
+    
+    # Colors
+    readonly C_RESET=$(tput sgr0)
+    readonly C_BOLD=$(tput bold)
+    readonly C_DIM=$(tput dim)
+    
+    # Foreground colors
+    readonly C_BLACK=$(tput setaf 0)
+    readonly C_RED=$(tput setaf 1)
+    readonly C_GREEN=$(tput setaf 2)
+    readonly C_YELLOW=$(tput setaf 3)
+    readonly C_BLUE=$(tput setaf 4)
+    readonly C_MAGENTA=$(tput setaf 5)
+    readonly C_CYAN=$(tput setaf 6)
+    readonly C_WHITE=$(tput setaf 7)
+    
+    # Bright colors (if supported)
+    readonly C_BRIGHT_GREEN=$(tput setaf 10 2>/dev/null || tput setaf 2)
+    readonly C_BRIGHT_RED=$(tput setaf 9 2>/dev/null || tput setaf 1)
+    readonly C_BRIGHT_YELLOW=$(tput setaf 11 2>/dev/null || tput setaf 3)
+    readonly C_BRIGHT_BLUE=$(tput setaf 12 2>/dev/null || tput setaf 4)
+else
+    COLORS_SUPPORTED=false
+    readonly C_RESET=""
+    readonly C_BOLD=""
+    readonly C_DIM=""
+    readonly C_BLACK=""
+    readonly C_RED=""
+    readonly C_GREEN=""
+    readonly C_YELLOW=""
+    readonly C_BLUE=""
+    readonly C_MAGENTA=""
+    readonly C_CYAN=""
+    readonly C_WHITE=""
+    readonly C_BRIGHT_GREEN=""
+    readonly C_BRIGHT_RED=""
+    readonly C_BRIGHT_YELLOW=""
+    readonly C_BRIGHT_BLUE=""
+fi
 
-print_header() {
-    echo
-    echo -e "${C_CYAN}━━━ $1 ━━━${C_RESET}"
-}
+# Unicode symbols (with ASCII fallbacks)
+if [[ "${LANG:-}" =~ UTF-8 ]] || [[ "${LC_ALL:-}" =~ UTF-8 ]]; then
+    readonly SYMBOL_SUCCESS="✓"
+    readonly SYMBOL_ERROR="✗"
+    readonly SYMBOL_WARNING="⚠"
+    readonly SYMBOL_INFO="ℹ"
+    readonly SYMBOL_ARROW="→"
+    readonly SYMBOL_BULLET="•"
+else
+    readonly SYMBOL_SUCCESS="+"
+    readonly SYMBOL_ERROR="x"
+    readonly SYMBOL_WARNING="!"
+    readonly SYMBOL_INFO="i"
+    readonly SYMBOL_ARROW=">"
+    readonly SYMBOL_BULLET="*"
+fi
+
+#############################################################################
+# Output Functions                                                          #
+#############################################################################
 
 print_success() {
-    echo -e "${C_GREEN}✓${C_RESET} $1"
+    local msg="$*"
+    echo "${C_BRIGHT_GREEN}${C_BOLD}${SYMBOL_SUCCESS}${C_RESET} ${C_GREEN}${msg}${C_RESET}"
 }
 
 print_error() {
-    echo -e "${C_RED}✗${C_RESET} $1" >&2
+    local msg="$*"
+    echo "${C_BRIGHT_RED}${C_BOLD}${SYMBOL_ERROR}${C_RESET} ${C_RED}${msg}${C_RESET}" >&2
 }
 
 print_warning() {
-    echo -e "${C_YELLOW}⚠${C_RESET} $1"
-}
-
-print_step() {
-    echo -e "${C_BLUE}→${C_RESET} $1"
+    local msg="$*"
+    echo "${C_BRIGHT_YELLOW}${C_BOLD}${SYMBOL_WARNING}${C_RESET} ${C_YELLOW}${msg}${C_RESET}"
 }
 
 print_info() {
-    echo -e "${C_BLUE}ℹ${C_RESET} $1"
+    local msg="$*"
+    echo "${C_BRIGHT_BLUE}${C_BOLD}${SYMBOL_INFO}${C_RESET} ${C_BLUE}${msg}${C_RESET}"
+}
+
+print_step() {
+    local msg="$*"
+    echo "${C_CYAN}${C_BOLD}${SYMBOL_ARROW}${C_RESET} ${C_CYAN}${msg}${C_RESET}"
+}
+
+print_header() {
+    local msg="$*"
+    echo
+    echo "${C_BOLD}${C_CYAN}━━━ ${msg} ━━━${C_RESET}"
+}
+
+print_subheader() {
+    local msg="$*"
+    echo "${C_DIM}${SYMBOL_BULLET} ${msg}${C_RESET}"
+}
+
+print_kv() {
+    local key="$1"
+    local value="$2"
+    printf "${C_CYAN}%-20s${C_RESET} ${C_WHITE}%s${C_RESET}\n" "$key:" "$value"
+}
+
+#############################################################################
+# Visual Elements                                                           #
+#############################################################################
+
+draw_box() {
+    local text="$1"
+    local width=62
+    local text_len=${#text}
+    local padding=$(( (width - text_len - 2) / 2 ))
+    local padding_right=$(( width - text_len - padding - 2 ))
+    
+    echo "${C_CYAN}"
+    echo "╔$(printf '═%.0s' $(seq 1 $width))╗"
+    printf "║%*s%s%*s║\n" $((padding + 1)) "" "$text" $((padding_right + 1)) ""
+    echo "╚$(printf '═%.0s' $(seq 1 $width))╝"
+    echo "${C_RESET}"
+}
+
+draw_separator() {
+    echo "${C_DIM}$(printf '─%.0s' $(seq 1 70))${C_RESET}"
+}
+
+#############################################################################
+# Logging                                                                   #
+#############################################################################
+
+log() {
+    local level="$1"
+    shift
+    local message="$*"
+    
+    case "$level" in
+        SUCCESS) print_success "$message" ;;
+        ERROR)   print_error "$message" ;;
+        WARN)    print_warning "$message" ;;
+        INFO)    print_info "$message" ;;
+        STEP)    print_step "$message" ;;
+        *)       echo "$message" ;;
+    esac
 }
 
 die() {
-    print_error "$1"
+    print_error "$@"
     exit 1
 }
 
-#################################################################
-# Create Directory Structure                                    #
-#################################################################
+# Error trap for better debugging
+trap 'print_error "Error on line $LINENO: $BASH_COMMAND"' ERR
+
+#############################################################################
+# Create Directory Structure                                                #
+#############################################################################
 
 create_directories() {
     print_header "Creating Directory Structure"
     
     if [[ -d "$INSTALL_DIR" ]]; then
         print_warning "Directory $INSTALL_DIR already exists"
-        echo -n "Remove and recreate? (yes/no): "
+        echo
+        printf "%b" "${C_CYAN}Remove and recreate?${C_RESET} ${C_DIM}(yes/no)${C_RESET} "
         read -r response
         if [[ "$response" =~ ^[Yy](es)?$ ]]; then
             rm -rf "$INSTALL_DIR"
@@ -98,16 +250,24 @@ create_directories() {
         fi
     fi
     
-    mkdir -p "$INSTALL_DIR"/{lib,server,apps,pve}
-    print_success "Created: $INSTALL_DIR/lib"
-    print_success "Created: $INSTALL_DIR/server"
-    print_success "Created: $INSTALL_DIR/apps"
-    print_success "Created: $INSTALL_DIR/pve"
+    local directories=(
+        "$INSTALL_DIR/lib"
+        "$INSTALL_DIR/server"
+        "$INSTALL_DIR/apps"
+        "$INSTALL_DIR/pve"
+    )
+    
+    for dir in "${directories[@]}"; do
+        mkdir -p "$dir"
+        print_success "Created: ${dir/$HOME/~}"
+    done
+    
+    echo
 }
 
-#################################################################
-# Download File with Retry                                       #
-#################################################################
+#############################################################################
+# Download File with Retry                                                  #
+#############################################################################
 
 download_file() {
     local url="$1"
@@ -115,7 +275,8 @@ download_file() {
     local retries=3
     
     for ((i=1; i<=retries; i++)); do
-        if wget -q --show-progress "$url" -O "$output" 2>/dev/null || curl -fsSL "$url" -o "$output" 2>/dev/null; then
+        if wget -q --show-progress "$url" -O "$output" 2>/dev/null || \
+           curl -fsSL "$url" -o "$output" 2>/dev/null; then
             return 0
         fi
         
@@ -128,9 +289,9 @@ download_file() {
     return 1
 }
 
-#################################################################
-# Download and Verify Components                                #
-#################################################################
+#############################################################################
+# Download and Verify Components                                            #
+#############################################################################
 
 download_components() {
     print_header "Downloading Components"
@@ -144,23 +305,25 @@ download_components() {
     fi
     print_success "Downloaded: CHECKSUMS.txt"
     
-# List of files to download: path|display_name
-local files=(
-    "lib/formatting.sh|Formatting Library"
-    "lib/helpers.sh|Helper Functions Library"
-    "server/hardening.sh|Hardening Script"
-    "server/jump.sh|Jump Server Script"
-    "pve/debvm.sh|Debian VM Template Script"
-    "pve/deblxc.sh|Debian LXC Template Script"
-    "apps/docker.sh|Docker Installer"
-    "apps/npm.sh|Nginx Proxy Manager Installer (native)"
-    "apps/npm-docker.sh|Nginx Proxy Manager Installer (Docker)"
-    "apps/cloudflared.sh|Cloudflare Tunnel Installer"
-    "apps/unbound.sh|Unbound DNS Installer"
-    "apps/samba.sh|Samba File Server Installer"
-    "apps/bookstack.sh|Bookstack Wiki Installer"
-    "apps/bentopdf.sh|BentoPDF editor Installer"
-)
+    echo
+    
+    # List of files to download: path|display_name
+    local files=(
+        "lib/formatting.sh|Formatting Library"
+        "lib/helpers.sh|Helper Functions Library"
+        "server/hardening.sh|Hardening Script"
+        "server/jump.sh|Jump Server Script"
+        "pve/debvm.sh|Debian VM Template Script"
+        "pve/deblxc.sh|Debian LXC Template Script"
+        "apps/docker.sh|Docker Installer"
+        "apps/npm.sh|Nginx Proxy Manager Installer (native)"
+        "apps/npm-docker.sh|Nginx Proxy Manager Installer (Docker)"
+        "apps/cloudflared.sh|Cloudflare Tunnel Installer"
+        "apps/unbound.sh|Unbound DNS Installer"
+        "apps/samba.sh|Samba File Server Installer"
+        "apps/bookstack.sh|Bookstack Wiki Installer"
+        "apps/bentopdf.sh|BentoPDF editor Installer"
+    )
     
     # Download each file
     for file_entry in "${files[@]}"; do
@@ -172,22 +335,26 @@ local files=(
             continue
         fi
         
-        local size=$(stat -c%s "$file_path" 2>/dev/null || stat -f%z "$file_path" 2>/dev/null || echo "unknown")
-        print_success "Downloaded: $file_path (${size} bytes)"
+        local size
+        size=$(stat -c%s "$file_path" 2>/dev/null || stat -f%z "$file_path" 2>/dev/null || echo "unknown")
+        print_subheader "Downloaded: $file_path (${size} bytes)"
     done
+    
+    echo
 }
 
-#################################################################
-# Verify Checksums                                              #
-#################################################################
+#############################################################################
+# Verify Checksums                                                          #
+#############################################################################
 
 verify_checksums() {
     print_header "Verifying Checksums"
     
     cd "$INSTALL_DIR" || die "Cannot change to $INSTALL_DIR"
     
-    # Verify each downloaded file
     local verification_failed=false
+    local verified_count=0
+    local skipped_count=0
     
     while IFS= read -r line; do
         # Skip comments and empty lines
@@ -195,50 +362,63 @@ verify_checksums() {
         [[ -z "$line" ]] && continue
         
         # Parse checksum line: "hash  filename"
-        local expected_hash=$(echo "$line" | awk '{print $1}')
-        local file_path=$(echo "$line" | awk '{print $2}')
+        local expected_hash
+        local file_path
+        expected_hash=$(echo "$line" | awk '{print $1}')
+        file_path=$(echo "$line" | awk '{print $2}')
         
         # Skip if file doesn't exist (optional files)
-        [[ ! -f "$file_path" ]] && continue
+        if [[ ! -f "$file_path" ]]; then
+            ((skipped_count++))
+            continue
+        fi
         
         print_step "Verifying $file_path..."
         
-        local actual_hash=$(sha256sum "$file_path" | awk '{print $1}')
+        local actual_hash
+        actual_hash=$(sha256sum "$file_path" | awk '{print $1}')
         
         if [[ "$actual_hash" == "$expected_hash" ]]; then
-            print_success "$file_path: OK"
+            print_subheader "$file_path: OK"
+            ((verified_count++))
         else
             print_error "$file_path: FAILED"
-            print_error "  Expected: ${expected_hash:0:16}..."
-            print_error "  Got:      ${actual_hash:0:16}..."
+            print_subheader "Expected: ${expected_hash:0:16}..."
+            print_subheader "Got:      ${actual_hash:0:16}..."
             verification_failed=true
         fi
     done < CHECKSUMS.txt
+    
+    echo
     
     if [[ "$verification_failed" == true ]]; then
         die "Checksum verification failed! Installation aborted."
     fi
     
     print_success "All checksums verified"
+    print_kv "Files verified" "$verified_count"
+    print_kv "Files skipped" "$skipped_count"
+    
+    echo
 }
 
-#################################################################
-# Show Menu and Execute Choice                                  #
-#################################################################
+#############################################################################
+# Show Menu and Execute Choice                                              #
+#############################################################################
 
 show_menu() {
     print_header "What would you like to do?"
     
     echo
-    echo "1) Create Debian VM Template (debvm.sh - runs on PVE host)"
-    echo "2) Create Debian LXC Template (deblxc.sh - runs on PVE host)"
-    echo "3) Harden Debian System (hardening.sh - runs in VM/LXC)"
-    echo "4) Setup Jump Server (jump.sh - runs in VM/LXC)"
-    echo "5) Exit"
+    printf "  ${C_BOLD}1)${C_RESET} Create Debian VM Template  ${C_DIM}(debvm.sh - runs on PVE host)${C_RESET}\n"
+    printf "  ${C_BOLD}2)${C_RESET} Create Debian LXC Template ${C_DIM}(deblxc.sh - runs on PVE host)${C_RESET}\n"
+    printf "  ${C_BOLD}3)${C_RESET} Harden Debian System       ${C_DIM}(hardening.sh - runs in VM/LXC)${C_RESET}\n"
+    printf "  ${C_BOLD}4)${C_RESET} Setup Jump Server          ${C_DIM}(jump.sh - runs in VM/LXC)${C_RESET}\n"
+    printf "  ${C_BOLD}5)${C_RESET} Exit\n"
     echo
     
     while true; do
-        echo -n "Select option [1-5]: "
+        printf "%b" "${C_CYAN}Select option [1-5]:${C_RESET} "
         read -r choice
         
         case "$choice" in
@@ -269,9 +449,9 @@ show_menu() {
     done
 }
 
-#################################################################
-# Run VM Template Creation (on PVE host)                        #
-#################################################################
+#############################################################################
+# Run VM Template Creation (on PVE host)                                    #
+#############################################################################
 
 run_vm_template_creation() {
     print_header "Creating Debian VM Template"
@@ -279,7 +459,7 @@ run_vm_template_creation() {
     # Check if running on Proxmox VE
     if [[ ! -f /etc/pve/.version ]]; then
         print_error "This option must run on Proxmox VE host"
-        print_step "Detected environment: Not PVE"
+        print_kv "Detected" "Not PVE"
         echo
         print_warning "To create templates, run bootstrap.sh on PVE host"
         exit 1
@@ -305,9 +485,9 @@ run_vm_template_creation() {
     fi
 }
 
-#################################################################
-# Run LXC Template Creation (on PVE host)                       #
-#################################################################
+#############################################################################
+# Run LXC Template Creation (on PVE host)                                   #
+#############################################################################
 
 run_lxc_template_creation() {
     print_header "Creating Debian LXC Template"
@@ -315,7 +495,7 @@ run_lxc_template_creation() {
     # Check if running on Proxmox VE
     if [[ ! -f /etc/pve/.version ]]; then
         print_error "This option must run on Proxmox VE host"
-        print_step "Detected environment: Not PVE"
+        print_kv "Detected" "Not PVE"
         echo
         print_warning "To create templates, run bootstrap.sh on PVE host"
         exit 1
@@ -331,7 +511,7 @@ run_lxc_template_creation() {
         print_warning "LXC template creation not yet available"
         echo
         print_step "Check repository for updates:"
-        echo "  https://github.com/vdarkobar/lab"
+        printf "  %b\n" "${C_CYAN}https://github.com/vdarkobar/lab${C_RESET}"
         exit 1
     fi
     
@@ -351,9 +531,9 @@ run_lxc_template_creation() {
     fi
 }
 
-#################################################################
-# Run Hardening (on Debian 13 VM/LXC)                           #
-#################################################################
+#############################################################################
+# Run Hardening (on Debian 13 VM/LXC)                                       #
+#############################################################################
 
 run_hardening() {
     print_header "Server Hardening"
@@ -361,15 +541,16 @@ run_hardening() {
     # Check if running on Debian
     if [[ ! -f /etc/debian_version ]]; then
         print_error "This option must run on Debian system"
-        print_info "Detected: Not Debian"
+        print_kv "Detected" "Not Debian"
         exit 1
     fi
     
     # Check Debian version
-    local debian_version=$(cat /etc/debian_version)
+    local debian_version
+    debian_version=$(cat /etc/debian_version)
     if [[ ! "$debian_version" =~ ^13 ]]; then
         print_warning "Expected Debian 13, found version: $debian_version"
-        echo -n "Continue anyway? (yes/no): "
+        printf "%b" "${C_CYAN}Continue anyway?${C_RESET} ${C_DIM}(yes/no)${C_RESET} "
         read -r response
         if [[ "$response" != "yes" ]]; then
             die "Hardening cancelled"
@@ -384,10 +565,10 @@ run_hardening() {
         print_error "Hardening script requires sudo"
         echo
         print_info "Install sudo first (as root):"
-        echo "  ${C_CYAN}apt update && apt install sudo${C_RESET}"
+        printf "  %b\n" "${C_CYAN}apt update && apt install sudo${C_RESET}"
         echo
         print_info "Then add your user to sudo group:"
-        echo "  ${C_CYAN}usermod -aG sudo username${C_RESET}"
+        printf "  %b\n" "${C_CYAN}usermod -aG sudo username${C_RESET}"
         echo
         print_info "Then run hardening.sh as that non-root user"
         exit 1
@@ -399,16 +580,16 @@ run_hardening() {
         print_error "Hardening must run as non-root user with sudo privileges"
         echo
         print_info "Create a user first (as root):"
-        echo "  ${C_CYAN}adduser username${C_RESET}"
-        echo "  ${C_CYAN}usermod -aG sudo username${C_RESET}"
+        printf "  %b\n" "${C_CYAN}adduser username${C_RESET}"
+        printf "  %b\n" "${C_CYAN}usermod -aG sudo username${C_RESET}"
         echo
         print_info "Then run as that user:"
-        echo "  ${C_CYAN}su - username${C_RESET}"
-        echo "  ${C_CYAN}cd ~/lab/server && ./hardening.sh${C_RESET}"
+        printf "  %b\n" "${C_CYAN}su - username${C_RESET}"
+        printf "  %b\n" "${C_CYAN}cd ~/lab/server && ./hardening.sh${C_RESET}"
         exit 1
     fi
     
-    print_success "Running as non-root user: $(whoami)"
+    print_success "Running as non-root user: ${C_BOLD}$(whoami)${C_RESET}"
     print_success "sudo is available"
     
     # Run hardening
@@ -430,9 +611,9 @@ run_hardening() {
     fi
 }
 
-#################################################################
-# Run Jump Server Setup (on Debian 13 VM/LXC)                   #
-#################################################################
+#############################################################################
+# Run Jump Server Setup (on Debian 13 VM/LXC)                               #
+#############################################################################
 
 run_jump_server() {
     print_header "Jump Server Setup"
@@ -440,15 +621,16 @@ run_jump_server() {
     # Check if running on Debian
     if [[ ! -f /etc/debian_version ]]; then
         print_error "This option must run on Debian system"
-        print_info "Detected: Not Debian"
+        print_kv "Detected" "Not Debian"
         exit 1
     fi
     
     # Check Debian version
-    local debian_version=$(cat /etc/debian_version)
+    local debian_version
+    debian_version=$(cat /etc/debian_version)
     if [[ ! "$debian_version" =~ ^13 ]]; then
         print_warning "Expected Debian 13, found version: $debian_version"
-        echo -n "Continue anyway? (yes/no): "
+        printf "%b" "${C_CYAN}Continue anyway?${C_RESET} ${C_DIM}(yes/no)${C_RESET} "
         read -r response
         if [[ "$response" != "yes" ]]; then
             die "Jump Server setup cancelled"
@@ -463,10 +645,10 @@ run_jump_server() {
         print_error "Jump Server script requires sudo"
         echo
         print_info "Install sudo first (as root):"
-        echo "  ${C_CYAN}apt update && apt install sudo${C_RESET}"
+        printf "  %b\n" "${C_CYAN}apt update && apt install sudo${C_RESET}"
         echo
         print_info "Then add your user to sudo group:"
-        echo "  ${C_CYAN}usermod -aG sudo username${C_RESET}"
+        printf "  %b\n" "${C_CYAN}usermod -aG sudo username${C_RESET}"
         echo
         print_info "Then run jump.sh as that non-root user"
         exit 1
@@ -478,16 +660,16 @@ run_jump_server() {
         print_error "Jump Server must run as non-root user with sudo privileges"
         echo
         print_info "Create a user first (as root):"
-        echo "  ${C_CYAN}adduser username${C_RESET}"
-        echo "  ${C_CYAN}usermod -aG sudo username${C_RESET}"
+        printf "  %b\n" "${C_CYAN}adduser username${C_RESET}"
+        printf "  %b\n" "${C_CYAN}usermod -aG sudo username${C_RESET}"
         echo
         print_info "Then run as that user:"
-        echo "  ${C_CYAN}su - username${C_RESET}"
-        echo "  ${C_CYAN}cd ~/lab/server && ./jump.sh${C_RESET}"
+        printf "  %b\n" "${C_CYAN}su - username${C_RESET}"
+        printf "  %b\n" "${C_CYAN}cd ~/lab/server && ./jump.sh${C_RESET}"
         exit 1
     fi
     
-    print_success "Running as non-root user: $(whoami)"
+    print_success "Running as non-root user: ${C_BOLD}$(whoami)${C_RESET}"
     print_success "sudo is available"
     
     # Run jump server setup
@@ -499,7 +681,7 @@ run_jump_server() {
         print_warning "Jump Server script not yet available"
         echo
         print_step "Check repository for updates:"
-        echo "  https://github.com/vdarkobar/lab"
+        printf "  %b\n" "${C_CYAN}https://github.com/vdarkobar/lab${C_RESET}"
         exit 1
     fi
     
@@ -519,53 +701,96 @@ run_jump_server() {
     fi
 }
 
-#################################################################
-# Cleanup on Error                                              #
-#################################################################
+#############################################################################
+# Cleanup on Error                                                          #
+#############################################################################
 
 cleanup() {
-    if [[ $? -ne 0 ]]; then
+    local exit_code=$?
+    # Remove error trap to avoid recursion
+    trap - ERR
+    
+    if [[ $exit_code -ne 0 ]]; then
+        echo
         print_error "Installation failed"
         if [[ -d "$INSTALL_DIR" ]]; then
             print_warning "Partial installation at: $INSTALL_DIR"
-            print_warning "You may want to remove it: rm -rf $INSTALL_DIR"
+            print_info "You may want to remove it:"
+            printf "  %b\n" "${C_CYAN}rm -rf $INSTALL_DIR${C_RESET}"
         fi
     fi
 }
 
 trap cleanup EXIT
 
-#################################################################
-# Main Function                                                 #
-#################################################################
+#############################################################################
+# Pre-flight Checks                                                         #
+#############################################################################
 
-main() {
-    echo
-    echo -e "${C_CYAN}╔════════════════════════════════════════════════════════════╗${C_RESET}"
-    echo -e "${C_CYAN}║                  Lab Bootstrap v${VERSION}                     ║${C_RESET}"
-    echo -e "${C_CYAN}║          https://github.com/vdarkobar/lab                 ║${C_RESET}"
-    echo -e "${C_CYAN}╚════════════════════════════════════════════════════════════╝${C_RESET}"
+preflight_checks() {
+    print_header "Pre-flight Checks"
     
     # Check for required tools
-    if ! command -v wget >/dev/null 2>&1 && ! command -v curl >/dev/null 2>&1; then
+    if command -v wget >/dev/null 2>&1; then
+        print_success "wget is available"
+    elif command -v curl >/dev/null 2>&1; then
+        print_success "curl is available"
+    else
         die "Either wget or curl is required"
     fi
     
-    if ! command -v sha256sum >/dev/null 2>&1; then
+    if command -v sha256sum >/dev/null 2>&1; then
+        print_success "sha256sum is available"
+    else
         die "sha256sum is required"
     fi
     
+    echo
+}
+
+#############################################################################
+# Show Summary                                                              #
+#############################################################################
+
+show_summary() {
+    echo
+    draw_separator
+    echo
+    
+    print_header "Installation Summary"
+    print_kv "Install Directory" "${INSTALL_DIR/$HOME/~}"
+    print_kv "Version" "$SCRIPT_VERSION"
+    
+    echo
+    print_header "Directory Structure"
+    print_subheader "lib/     - Shared libraries"
+    print_subheader "server/  - Server scripts (hardening, jump)"
+    print_subheader "apps/    - Application installers"
+    print_subheader "pve/     - Proxmox VE scripts"
+    
+    echo
+}
+
+#############################################################################
+# Main Function                                                             #
+#############################################################################
+
+main() {
+    # Clear screen if running directly (not piped)
+    [[ -t 1 ]] && clear || true
+    
+    draw_box "Lab Bootstrap v${SCRIPT_VERSION}"
+    printf "%*s${C_DIM}https://github.com/vdarkobar/lab${C_RESET}\n" 18 ""
+    
     # Run installation steps
+    preflight_checks
     create_directories
     download_components
     verify_checksums
+    show_summary
     
     # Show menu for what to do next
     show_menu
-    
-    echo
-    print_success "Installation directory: $INSTALL_DIR"
-    echo
 }
 
 # Run main

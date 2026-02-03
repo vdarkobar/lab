@@ -369,7 +369,7 @@ verify_checksums() {
         
         # Skip if file doesn't exist (optional files)
         if [[ ! -f "$file_path" ]]; then
-            ((skipped_count++))
+            ((skipped_count++)) || true
             continue
         fi
         
@@ -380,7 +380,7 @@ verify_checksums() {
         
         if [[ "$actual_hash" == "$expected_hash" ]]; then
             print_subheader "$file_path: OK"
-            ((verified_count++))
+            ((verified_count++)) || true
         else
             print_error "$file_path: FAILED"
             print_subheader "Expected: ${expected_hash:0:16}..."

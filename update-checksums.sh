@@ -178,8 +178,8 @@ else
     echo "  ${C_CYAN}git diff CHECKSUMS.txt${C_RESET}"
     echo
     print_info "Then commit:"
-    echo "${C_CYAN}git add CHECKSUMS.txt bootstrap.sh.sha256 && \${C_RESET}"
-    echo "${C_CYAN}git commit -m 'Update checksums' && \${C_RESET}"
+    echo "${C_CYAN}git add CHECKSUMS.txt bootstrap.sh.sha256 && \\${C_RESET}"
+    echo "${C_CYAN}git commit -m 'Update checksums' && \\${C_RESET}"
     echo "${C_CYAN}git push${C_RESET}"
 fi
 draw_separator

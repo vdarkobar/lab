@@ -4,9 +4,9 @@
 # Debian 13 VM/LXC Server Hardening Script                                  #
 #############################################################################
 
-readonly SCRIPT_VERSION="2.2.0"
+readonly SCRIPT_VERSION="2.3.0"
 
-# Handle --help flag early (before sourcing libraries)
+# Handle --help flag early (before defining functions)
 case "${1:-}" in
     --help|-h)
         echo "Debian Server Hardening Script v${SCRIPT_VERSION}"
@@ -66,20 +66,192 @@ esac
 
 set -euo pipefail  # Exit on error, undefined vars, pipe failures
 
-#################################################################
-# Load Formatting Library                                       #
-#################################################################
+#############################################################################
+# Script Configuration                                                      #
+#############################################################################
 
 # Get the directory where this script is located
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Source the formatting library
-if [[ -f "$SCRIPT_DIR/../lib/formatting.sh" ]]; then
-    source "$SCRIPT_DIR/../lib/formatting.sh"
+# Track services we stop (to restart on cleanup)
+UNATTENDED_UPGRADES_WAS_ACTIVE=false
+
+#############################################################################
+# Terminal Formatting (embedded - no external dependency)                   #
+#############################################################################
+
+# Check if terminal supports colors
+if [[ -t 1 ]] && command -v tput >/dev/null 2>&1 && tput setaf 1 >/dev/null 2>&1; then
+    COLORS_SUPPORTED=true
+    
+    # Colors
+    readonly C_RESET=$(tput sgr0)
+    readonly C_BOLD=$(tput bold)
+    readonly C_DIM=$(tput dim)
+    
+    # Foreground colors
+    readonly C_BLACK=$(tput setaf 0)
+    readonly C_RED=$(tput setaf 1)
+    readonly C_GREEN=$(tput setaf 2)
+    readonly C_YELLOW=$(tput setaf 3)
+    readonly C_BLUE=$(tput setaf 4)
+    readonly C_MAGENTA=$(tput setaf 5)
+    readonly C_CYAN=$(tput setaf 6)
+    readonly C_WHITE=$(tput setaf 7)
+    
+    # Bright colors (if supported)
+    readonly C_BRIGHT_GREEN=$(tput setaf 10 2>/dev/null || tput setaf 2)
+    readonly C_BRIGHT_RED=$(tput setaf 9 2>/dev/null || tput setaf 1)
+    readonly C_BRIGHT_YELLOW=$(tput setaf 11 2>/dev/null || tput setaf 3)
+    readonly C_BRIGHT_BLUE=$(tput setaf 12 2>/dev/null || tput setaf 4)
 else
-    echo "ERROR: Cannot find formatting library at $SCRIPT_DIR/../lib/formatting.sh" >&2
-    exit 1
+    COLORS_SUPPORTED=false
+    readonly C_RESET=""
+    readonly C_BOLD=""
+    readonly C_DIM=""
+    readonly C_BLACK=""
+    readonly C_RED=""
+    readonly C_GREEN=""
+    readonly C_YELLOW=""
+    readonly C_BLUE=""
+    readonly C_MAGENTA=""
+    readonly C_CYAN=""
+    readonly C_WHITE=""
+    readonly C_BRIGHT_GREEN=""
+    readonly C_BRIGHT_RED=""
+    readonly C_BRIGHT_YELLOW=""
+    readonly C_BRIGHT_BLUE=""
 fi
+
+# Unicode symbols (with ASCII fallbacks)
+if [[ "${LANG:-}" =~ UTF-8 ]] || [[ "${LC_ALL:-}" =~ UTF-8 ]]; then
+    readonly SYMBOL_SUCCESS="✓"
+    readonly SYMBOL_ERROR="✗"
+    readonly SYMBOL_WARNING="⚠"
+    readonly SYMBOL_INFO="ℹ"
+    readonly SYMBOL_ARROW="→"
+    readonly SYMBOL_BULLET="•"
+else
+    readonly SYMBOL_SUCCESS="+"
+    readonly SYMBOL_ERROR="x"
+    readonly SYMBOL_WARNING="!"
+    readonly SYMBOL_INFO="i"
+    readonly SYMBOL_ARROW=">"
+    readonly SYMBOL_BULLET="*"
+fi
+
+#############################################################################
+# Output Functions                                                          #
+#############################################################################
+
+print_success() {
+    local msg="$*"
+    echo "${C_BRIGHT_GREEN}${C_BOLD}${SYMBOL_SUCCESS}${C_RESET} ${C_GREEN}${msg}${C_RESET}"
+}
+
+print_error() {
+    local msg="$*"
+    echo "${C_BRIGHT_RED}${C_BOLD}${SYMBOL_ERROR}${C_RESET} ${C_RED}${msg}${C_RESET}" >&2
+}
+
+print_warning() {
+    local msg="$*"
+    echo "${C_BRIGHT_YELLOW}${C_BOLD}${SYMBOL_WARNING}${C_RESET} ${C_YELLOW}${msg}${C_RESET}"
+}
+
+print_info() {
+    local msg="$*"
+    echo "${C_BRIGHT_BLUE}${C_BOLD}${SYMBOL_INFO}${C_RESET} ${C_BLUE}${msg}${C_RESET}"
+}
+
+print_step() {
+    local msg="$*"
+    echo "${C_CYAN}${C_BOLD}${SYMBOL_ARROW}${C_RESET} ${C_CYAN}${msg}${C_RESET}"
+}
+
+print_header() {
+    local msg="$*"
+    echo
+    echo "${C_BOLD}${C_CYAN}━━━ ${msg} ━━━${C_RESET}"
+}
+
+print_subheader() {
+    local msg="$*"
+    echo "${C_DIM}${SYMBOL_BULLET} ${msg}${C_RESET}"
+}
+
+print_kv() {
+    local key="$1"
+    local value="$2"
+    printf "${C_CYAN}%-20s${C_RESET} ${C_WHITE}%s${C_RESET}\n" "$key:" "$value"
+}
+
+#############################################################################
+# Visual Elements                                                           #
+#############################################################################
+
+draw_box() {
+    local text="$1"
+    local width=68
+    local padding=$(( (width - ${#text} - 2) / 2 ))
+    
+    echo "${C_CYAN}"
+    echo "╔$(printf '═%.0s' $(seq 1 $width))╗"
+    printf "║%*s%s%*s║\n" $padding "" "$text" $padding ""
+    echo "╚$(printf '═%.0s' $(seq 1 $width))╝"
+    echo "${C_RESET}"
+}
+
+draw_separator() {
+    echo "${C_DIM}$(printf '─%.0s' $(seq 1 70))${C_RESET}"
+}
+
+#############################################################################
+# Logging                                                                   #
+#############################################################################
+
+log() {
+    local level="$1"
+    shift
+    local message="$*"
+    
+    case "$level" in
+        SUCCESS) print_success "$message" ;;
+        ERROR)   print_error "$message" ;;
+        WARN)    print_warning "$message" ;;
+        INFO)    print_info "$message" ;;
+        STEP)    print_step "$message" ;;
+        *)       echo "$message" ;;
+    esac
+}
+
+die() {
+    print_error "$@"
+    exit 1
+}
+
+# Error trap for better debugging (set after print_error is defined)
+trap 'print_error "Error on line $LINENO: $BASH_COMMAND"' ERR
+
+#############################################################################
+# Cleanup / Restore Services                                                #
+#############################################################################
+
+cleanup() {
+    local exit_code=$?
+    
+    # Restore unattended-upgrades if we stopped it
+    if [[ "$UNATTENDED_UPGRADES_WAS_ACTIVE" == true ]]; then
+        if sudo systemctl start unattended-upgrades 2>/dev/null; then
+            print_info "Restored unattended-upgrades service"
+        fi
+    fi
+    
+    exit $exit_code
+}
+
+# Register cleanup on exit (normal or error)
+trap cleanup EXIT
 
 #################################################################
 # Application Registry - ADD NEW APPS HERE                      #
@@ -108,6 +280,57 @@ readonly APPS_BASE_URL="https://raw.githubusercontent.com/vdarkobar/lab/main/app
 
 readonly LOG_FILE="/var/log/hardening-$(date +%Y%m%d-%H%M%S).log"
 readonly BACKUP_DIR="/root/hardening-backups-$(date +%Y%m%d-%H%M%S)"
+
+# Hardening marker files (used for detection)
+readonly HARDENING_MARKER="/etc/ssh/sshd_config.d/99-lab-hardening.conf"
+
+#################################################################
+# Previous Run Detection                                         #
+#################################################################
+
+check_previous_hardening() {
+    # Check for hardening marker files
+    if [[ -f "$HARDENING_MARKER" ]]; then
+        return 0  # Previously hardened
+    fi
+    return 1  # Not hardened yet
+}
+
+show_already_hardened_menu() {
+    clear
+    draw_box "System Already Hardened"
+    
+    echo
+    print_header "Detected Hardening"
+    
+    # Show which hardening configs exist
+    [[ -f /etc/ssh/sshd_config.d/99-lab-hardening.conf ]] && print_success "SSH hardening configured"
+    [[ -f /etc/fail2ban/jail.d/99-lab-hardening.conf ]] && print_success "Fail2Ban configured"
+    [[ -f /etc/sysctl.d/99-lab-hardening.conf ]] && print_success "Sysctl hardening configured"
+    
+    # Check service status
+    echo
+    print_header "Service Status"
+    systemctl is-active --quiet sshd 2>/dev/null && print_success "SSH: running" || print_warning "SSH: not running"
+    systemctl is-active --quiet fail2ban 2>/dev/null && print_success "Fail2Ban: running" || print_warning "Fail2Ban: not running"
+    sudo ufw status 2>/dev/null | grep -q "Status: active" && print_success "UFW: active" || print_warning "UFW: inactive"
+    
+    echo
+    print_info "Hardening steps will be skipped"
+    print_info "You can install additional applications below"
+    echo
+    
+    # Offer app menu
+    if show_app_menu; then
+        log SUCCESS "Application installation completed"
+    else
+        print_info "No application selected"
+    fi
+    
+    echo
+    draw_separator
+    echo
+}
 
 #################################################################
 # Pre-flight Checks                                             #
@@ -382,6 +605,13 @@ backup_file() {
 
 install_packages() {
     print_header "Installing Security Packages"
+    
+    # Stop unattended upgrades if running (track state to restart later)
+    if systemctl is-active --quiet unattended-upgrades 2>/dev/null; then
+        UNATTENDED_UPGRADES_WAS_ACTIVE=true
+        sudo systemctl stop unattended-upgrades 2>/dev/null || true
+        print_info "Temporarily stopped unattended-upgrades"
+    fi
     
     # Update package lists
     print_step "Updating package repositories..."
@@ -1204,6 +1434,12 @@ main() {
         echo "  usermod -aG sudo $(whoami)" >&2
         echo "Then logout and login again" >&2
         exit 1
+    fi
+    
+    # Check for previous hardening run
+    if check_previous_hardening; then
+        show_already_hardened_menu
+        exit 0
     fi
     
     # Initialize logging - create file as root but give ownership to current user

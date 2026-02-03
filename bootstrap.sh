@@ -335,9 +335,8 @@ download_components() {
             continue
         fi
         
-        local size
-        size=$(stat -c%s "$file_path" 2>/dev/null || stat -f%z "$file_path" 2>/dev/null || echo "unknown")
-        print_subheader "Downloaded: $file_path (${size} bytes)"
+        local size=$(stat -c%s "$file_path" 2>/dev/null || stat -f%z "$file_path" 2>/dev/null || echo "unknown")
+        print_success "Downloaded: $file_path (${size} bytes)"
     done
     
     echo
@@ -362,29 +361,24 @@ verify_checksums() {
         [[ -z "$line" ]] && continue
         
         # Parse checksum line: "hash  filename"
-        local expected_hash
-        local file_path
-        expected_hash=$(echo "$line" | awk '{print $1}')
-        file_path=$(echo "$line" | awk '{print $2}')
+        # Combined local+assignment masks exit codes (intentional with set -e)
+        local expected_hash=$(echo "$line" | awk '{print $1}')
+        local file_path=$(echo "$line" | awk '{print $2}')
         
         # Skip if file doesn't exist (optional files)
-        if [[ ! -f "$file_path" ]]; then
-            ((skipped_count++)) || true
-            continue
-        fi
+        [[ ! -f "$file_path" ]] && { ((skipped_count++)) || true; continue; }
         
         print_step "Verifying $file_path..."
         
-        local actual_hash
-        actual_hash=$(sha256sum "$file_path" | awk '{print $1}')
+        local actual_hash=$(sha256sum "$file_path" | awk '{print $1}')
         
         if [[ "$actual_hash" == "$expected_hash" ]]; then
-            print_subheader "$file_path: OK"
+            print_success "$file_path: OK"
             ((verified_count++)) || true
         else
             print_error "$file_path: FAILED"
-            print_subheader "Expected: ${expected_hash:0:16}..."
-            print_subheader "Got:      ${actual_hash:0:16}..."
+            print_error "  Expected: ${expected_hash:0:16}..."
+            print_error "  Got:      ${actual_hash:0:16}..."
             verification_failed=true
         fi
     done < CHECKSUMS.txt
@@ -546,8 +540,7 @@ run_hardening() {
     fi
     
     # Check Debian version
-    local debian_version
-    debian_version=$(cat /etc/debian_version)
+    local debian_version=$(cat /etc/debian_version)
     if [[ ! "$debian_version" =~ ^13 ]]; then
         print_warning "Expected Debian 13, found version: $debian_version"
         printf "%b" "${C_CYAN}Continue anyway?${C_RESET} ${C_DIM}(yes/no)${C_RESET} "
@@ -626,8 +619,7 @@ run_jump_server() {
     fi
     
     # Check Debian version
-    local debian_version
-    debian_version=$(cat /etc/debian_version)
+    local debian_version=$(cat /etc/debian_version)
     if [[ ! "$debian_version" =~ ^13 ]]; then
         print_warning "Expected Debian 13, found version: $debian_version"
         printf "%b" "${C_CYAN}Continue anyway?${C_RESET} ${C_DIM}(yes/no)${C_RESET} "

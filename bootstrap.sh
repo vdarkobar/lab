@@ -12,14 +12,15 @@
 #                                                                           #
 # INSTALLATION METHODS:                                                     #
 #                                                                           #
-# Quick Install (convenient, medium security):                              #
+# Quick Install (convenient):                                               #
 #   bash -c "$(wget -qLO - https://raw.githubusercontent.com/vdarkobar/lab/main/bootstrap.sh)"
 #                                                                           #
-# Secure Install (verified, high security - RECOMMENDED):                   #
-#   wget https://raw.githubusercontent.com/vdarkobar/lab/main/bootstrap.sh
-#   wget https://raw.githubusercontent.com/vdarkobar/lab/main/bootstrap.sh.sha256
+# Secure Install (verified):                                                #
+#   wget https://raw.githubusercontent.com/vdarkobar/lab/main/bootstrap.sh && \
+#   wget https://raw.githubusercontent.com/vdarkobar/lab/main/bootstrap.sh.sha256 && \
 #   sha256sum -c bootstrap.sh.sha256                                        #
-#   chmod +x bootstrap.sh                                                   #
+#                                                                           #
+#   chmod +x bootstrap.sh && \                                              #
 #   ./bootstrap.sh                                                          #
 #                                                                           #
 # Full source code review:                                                  #
@@ -152,7 +153,8 @@ local files=(
     "pve/debvm.sh|Debian VM Template Script"
     "pve/deblxc.sh|Debian LXC Template Script"
     "apps/docker.sh|Docker Installer"
-    "apps/npm.sh|Nginx Proxy Manager Installer"
+    "apps/npm.sh|Nginx Proxy Manager Installer (native)"
+    "apps/npm-docker.sh|Nginx Proxy Manager Installer (Docker)"
     "apps/cloudflared.sh|Cloudflare Tunnel Installer"
     "apps/unbound.sh|Unbound DNS Installer"
     "apps/samba.sh|Samba File Server Installer"

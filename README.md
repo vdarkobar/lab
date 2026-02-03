@@ -2,7 +2,7 @@
 <p align="center">
   <em>
     <a href="https://github.com/vdarkobar/lab/tree/main/misc/Proxmox.md">Proxmox</a> > 
-    <a href="https://github.com/vdarkobar/lab/tree/main/misc/Debian.md">Debian VM/LXC</a> > 
+    <a href="https://github.com/vdarkobar/lab/tree/main/misc/Debian.md">Debian VM/LXC</a> 
   </em>
 </p>
   

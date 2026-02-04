@@ -636,7 +636,7 @@ install_packages() {
     done
     
     if [[ ${#packages_to_install[@]} -gt 0 ]]; then
-        print_step "Installing ${#packages_to_install[@]} packages..."
+        print_step "Installing packages: ${packages_to_install[*]}"
         
         if ! sudo apt-get update -qq >>"$LOG_FILE" 2>&1; then
             die "Failed to update package lists"

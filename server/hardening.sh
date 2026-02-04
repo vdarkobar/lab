@@ -1245,7 +1245,7 @@ install_app() {
         print_step "Executing ${script_name}..."
         chmod +x "$local_script"
         
-        if sudo -E bash "$local_script"; then
+        if bash "$local_script"; then
             log SUCCESS "${display_name} installed successfully"
             print_success "${display_name} installation completed"
         else
@@ -1364,7 +1364,7 @@ download_and_install_app() {
     print_step "Executing ${script_name}..."
     chmod +x "$tmp_script"
     
-    if sudo -E bash "$tmp_script"; then
+    if bash "$tmp_script"; then
         log SUCCESS "${display_name} installed successfully"
         print_success "${display_name} installation completed"
     else

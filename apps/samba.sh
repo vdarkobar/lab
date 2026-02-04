@@ -638,11 +638,11 @@ install_packages() {
     if [[ ${#packages_to_install[@]} -gt 0 ]]; then
         print_step "Installing ${#packages_to_install[@]} packages..."
         
-        if ! sudo apt-get update -qq 2>>"$LOG_FILE"; then
+        if ! sudo apt-get update -qq >>"$LOG_FILE" 2>&1; then
             die "Failed to update package lists"
         fi
         
-        if ! sudo DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get install -y -qq "${packages_to_install[@]}" 2>>"$LOG_FILE"; then
+        if ! sudo DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get install -y -qq "${packages_to_install[@]}" >>"$LOG_FILE" 2>&1; then
             die "Package installation failed"
         fi
         log SUCCESS "Packages installed"
@@ -1157,9 +1157,13 @@ cmd_status() {
         die "Samba is not installed"
     fi
     
-    # Version info
-    local version
-    version=$(smbd --version 2>/dev/null || echo "unknown")
+    # Version info (try multiple methods)
+    local version="unknown"
+    if smbd -V >/dev/null 2>&1; then
+        version=$(smbd -V 2>&1 | head -1)
+    elif command_exists dpkg-query; then
+        version=$(dpkg-query -W -f='${Version}' samba 2>/dev/null || echo "unknown")
+    fi
     print_kv "Version" "$version"
     
     # Service status
@@ -1183,24 +1187,32 @@ cmd_status() {
         print_warning "Enabled: no"
     fi
     
-    # Show shares
+    # Show shares using testparm (Samba's official config parser)
     echo
     print_header "Configured Shares"
-    if [[ -f "$SAMBA_CONF" ]]; then
-        grep '^\[' "$SAMBA_CONF" | grep -v '\[global\]' | while read -r line; do
-            local share_name="${line//[\[\]]/}"
-            local share_path
-            share_path=$(awk "/\[${share_name}\]/,/^\[/" "$SAMBA_CONF" | grep "path" | awk -F= '{print $2}' | xargs)
-            print_kv "$share_name" "${share_path:-unknown}"
-        done
+    if command_exists testparm; then
+        local shares
+        shares=$(testparm -s 2>/dev/null | grep -E '^\[' | grep -v '\[global\]' || true)
+        if [[ -n "$shares" ]]; then
+            echo "$shares" | while read -r line; do
+                local share_name="${line//[\[\]]/}"
+                local share_path
+                share_path=$(testparm -s --section-name="$share_name" 2>/dev/null | grep "path = " | awk '{print $3}')
+                print_kv "$share_name" "${share_path:-unknown}"
+            done
+        else
+            print_info "No shares configured"
+        fi
     else
-        print_warning "No configuration found"
+        print_warning "testparm not found"
     fi
     
     # Show connected users
     echo
     print_header "Connected Users"
-    if sudo smbstatus -b 2>/dev/null | grep -q "^[0-9]"; then
+    local connected
+    connected=$(sudo smbstatus -b 2>/dev/null | tail -n +5 | grep "^[0-9]" || true)
+    if [[ -n "$connected" ]]; then
         sudo smbstatus -b 2>/dev/null | tail -n +5
     else
         print_info "No users currently connected"
@@ -1209,9 +1221,14 @@ cmd_status() {
     # Show Samba users
     echo
     print_header "Configured Samba Users"
-    if sudo pdbedit -L 2>/dev/null | head -10; then
+    local samba_users
+    samba_users=$(sudo pdbedit -L 2>/dev/null | cut -d: -f1 || true)
+    if [[ -n "$samba_users" ]]; then
         local user_count
-        user_count=$(sudo pdbedit -L 2>/dev/null | wc -l)
+        user_count=$(echo "$samba_users" | wc -l)
+        echo "$samba_users" | head -10 | while read -r user; do
+            print_subheader "$user"
+        done
         if [[ $user_count -gt 10 ]]; then
             print_info "... and $((user_count - 10)) more users"
         fi
@@ -1430,13 +1447,18 @@ main() {
         exit 1
     fi
     
-    # Check if Samba is already installed and running
-    if command -v smbd >/dev/null 2>&1 && systemctl is-active --quiet smbd 2>/dev/null; then
+    # Check if Samba is already installed
+    if command -v smbd >/dev/null 2>&1 || [[ -f "$SAMBA_CONF" ]]; then
         clear
         draw_box "Samba File Server - Already Installed"
         
-        local version
-        version=$(smbd --version 2>/dev/null || echo "unknown")
+        # Version info (try multiple methods)
+        local version="unknown"
+        if smbd -V >/dev/null 2>&1; then
+            version=$(smbd -V 2>&1 | head -1)
+        elif command -v dpkg-query >/dev/null 2>&1; then
+            version=$(dpkg-query -W -f='${Version}' samba 2>/dev/null || echo "unknown")
+        fi
         
         echo
         print_header "Current Installation"
@@ -1444,16 +1466,24 @@ main() {
         print_kv "Service Status" "$(systemctl is-active smbd 2>/dev/null || echo 'unknown')"
         print_kv "Enabled" "$(systemctl is-enabled smbd 2>/dev/null || echo 'unknown')"
         
-        # Show configured shares
-        if [[ -f "$SAMBA_CONF" ]]; then
-            echo
-            print_header "Configured Shares"
-            grep '^\[' "$SAMBA_CONF" | grep -v '\[global\]' | while read -r line; do
-                local share_name="${line//[\[\]]/}"
-                local share_path
-                share_path=$(awk "/\[${share_name}\]/,/^\[/" "$SAMBA_CONF" | grep "path" | awk -F= '{print $2}' | xargs)
-                print_kv "$share_name" "${share_path:-unknown}"
-            done
+        # Show configured shares using testparm (Samba's official config parser)
+        if command -v testparm >/dev/null 2>&1; then
+            local shares
+            shares=$(testparm -s 2>/dev/null | grep -E '^\[' | grep -v '\[global\]' || true)
+            if [[ -n "$shares" ]]; then
+                echo
+                print_header "Configured Shares"
+                echo "$shares" | while read -r line; do
+                    local share_name="${line//[\[\]]/}"
+                    local share_path
+                    share_path=$(testparm -s --section-name="$share_name" 2>/dev/null | grep "path = " | awk '{print $3}')
+                    print_kv "$share_name" "${share_path:-unknown}"
+                done
+            else
+                echo
+                print_header "Configured Shares"
+                print_info "No shares configured"
+            fi
         fi
         
         echo

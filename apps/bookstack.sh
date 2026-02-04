@@ -922,56 +922,64 @@ configure_ufw() {
     
     # Skip if requested
     if [[ "$BOOKSTACK_SKIP_UFW" == "true" ]]; then
-        print_info "Skipping UFW configuration (BOOKSTACK_SKIP_UFW=true)"
+        log INFO "Skipping UFW configuration (BOOKSTACK_SKIP_UFW=true)"
         echo
         return 0
     fi
     
     # Check if UFW is available
     if ! command_exists ufw; then
-        print_info "UFW not installed - skipping firewall configuration"
+        log INFO "UFW not installed - skipping firewall configuration"
         echo
         return 0
     fi
     
-    # Test if UFW is functional
-    if ! sudo ufw status >/dev/null 2>&1; then
-        print_warning "UFW not functional in this environment"
-        print_info "Configure firewall on the host instead"
+    # Test if UFW is functional (may fail in unprivileged containers)
+    local ufw_test_output
+    if ! ufw_test_output=$(sudo ufw status 2>&1); then
+        log WARN "UFW not functional in this environment"
+        log INFO "Error: $ufw_test_output"
+        log INFO "Configure firewall on the host instead"
         echo
         return 0
     fi
     
     # Check if UFW is active
-    local ufw_status
-    ufw_status=$(sudo ufw status 2>/dev/null || echo "inactive")
-    
-    if ! echo "$ufw_status" | grep -q "Status: active"; then
-        print_info "UFW is not active - skipping firewall configuration"
+    if ! echo "$ufw_test_output" | grep -q "Status: active"; then
+        log INFO "UFW is not active - skipping firewall configuration"
+        log INFO "To enable UFW manually: sudo ufw enable"
         echo
         return 0
     fi
     
-    print_success "UFW is active"
+    log SUCCESS "UFW is active"
     print_step "Adding firewall rules..."
     
     # Allow HTTP
-    if echo "$ufw_status" | grep -qE "80/tcp.*ALLOW"; then
-        print_success "Port 80/tcp already allowed"
+    if echo "$ufw_test_output" | grep -qE "80/tcp.*ALLOW"; then
+        log SUCCESS "Port 80/tcp already allowed"
     else
         if sudo ufw allow 80/tcp comment "BookStack HTTP" >> "$LOG_FILE" 2>&1; then
-            print_success "Allowed port 80/tcp (HTTP)"
+            log SUCCESS "Allowed port 80/tcp (HTTP)"
         else
-            # Try without comment for older UFW
-            sudo ufw allow 80/tcp >> "$LOG_FILE" 2>&1 || true
+            # Try without comment for older UFW versions
+            if sudo ufw allow 80/tcp >> "$LOG_FILE" 2>&1; then
+                log SUCCESS "Allowed port 80/tcp (HTTP)"
+            else
+                log WARN "Failed to add UFW rule for port 80/tcp"
+            fi
         fi
     fi
     
     # Reload UFW
-    print_step "Reloading firewall..."
-    sudo ufw reload >> "$LOG_FILE" 2>&1 || true
+    log STEP "Reloading firewall..."
+    if sudo ufw reload >> "$LOG_FILE" 2>&1; then
+        log SUCCESS "Firewall reloaded"
+    else
+        log WARN "UFW reload failed (rules may still be applied)"
+    fi
     
-    log SUCCESS "Firewall configured"
+    log SUCCESS "Firewall configuration complete"
     echo
 }
 

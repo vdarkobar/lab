@@ -737,10 +737,11 @@ generate_config() {
    
    server min protocol = ${MIN_PROTOCOL}
    client min protocol = ${MIN_PROTOCOL}
-   server max protocol = SMB3
    server signing = ${SERVER_SIGNING}
    client signing = ${SERVER_SIGNING}
    smb encrypt = ${SMB_ENCRYPTION}
+   server smb3 encryption algorithms = AES-256-GCM, AES-256-CCM
+   server smb3 signing algorithms = AES-256-GMAC
    ntlm auth = ntlmv2-only
    
    log file = /var/log/samba/log.%m

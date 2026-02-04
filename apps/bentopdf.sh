@@ -1069,10 +1069,10 @@ show_summary() {
     echo
     print_header "Management Commands"
     printf "  %b\n" "${C_DIM}# Check status${C_RESET}"
-    printf "  %b\n" "${C_CYAN}systemctl status bentopdf${C_RESET}"
+    printf "  %b\n" "${C_CYAN}sudo systemctl status bentopdf${C_RESET}"
     echo
     printf "  %b\n" "${C_DIM}# View logs${C_RESET}"
-    printf "  %b\n" "${C_CYAN}journalctl -u bentopdf -f${C_RESET}"
+    printf "  %b\n" "${C_CYAN}sudo journalctl -u bentopdf -f${C_RESET}"
     echo
     printf "  %b\n" "${C_DIM}# Restart service${C_RESET}"
     printf "  %b\n" "${C_CYAN}sudo systemctl restart bentopdf${C_RESET}"
@@ -1082,7 +1082,7 @@ show_summary() {
     
     echo
     print_header "Reinstall / Update"
-    printf "  %b\n" "${C_CYAN}./bentopdf.sh --force${C_RESET}"
+    printf "  %b\n" "${C_CYAN}sudo ./bentopdf.sh --force${C_RESET}"
     
     echo
     print_header "Log File"

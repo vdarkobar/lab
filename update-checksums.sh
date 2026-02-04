@@ -516,8 +516,8 @@ show_summary() {
         echo "  ${C_CYAN}git diff $CHECKSUMS_FILE${C_RESET}"
         echo
         print_info "Commit workflow:"
-        echo "${C_CYAN}git add $CHECKSUMS_FILE $BOOTSTRAP_CHECKSUM$ & \\{C_RESET}"
-        echo "${C_CYAN}git commit -m 'Update checksums' & \\${C_RESET}"
+        echo "${C_CYAN}git add $CHECKSUMS_FILE $BOOTSTRAP_CHECKSUM$ && \\${C_RESET}"
+        echo "${C_CYAN}git commit -m 'Update checksums' && \\${C_RESET}"
         echo "${C_CYAN}git push${C_RESET}"
     fi
     draw_separator

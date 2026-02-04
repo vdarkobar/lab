@@ -112,8 +112,8 @@ readonly SAMBA_CONF="/etc/samba/smb.conf"
 readonly SAMBA_CONF_DIR="/etc/samba"
 
 # Security settings (hardcoded for security)
-readonly SERVER_SIGNING="auto"
-readonly SMB_ENCRYPTION="desired"
+readonly SERVER_SIGNING="mandatory"
+readonly SMB_ENCRYPTION="mandatory"
 
 # Environment variable defaults (can be overridden)
 # Using SAMBA_ prefix to avoid conflicts with shell environment

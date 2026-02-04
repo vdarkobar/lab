@@ -1,5 +1,5 @@
 # Lab Components Checksums
-# Generated: 2026-02-04
+# Generated: 2026-02-05
 # Algorithm: SHA256
 #
 # Format: checksum  filepath
@@ -11,7 +11,7 @@
 2b85d02194c304fc1189e53d8a18b0d9a4eb1595d6b4d5066df14157a55946e0  lib/helpers.sh
 
 # Server Scripts
-7c324e92202dac32aa4262f4d2f2a5ed455b2beb053df39c18ba596051ac61ab  server/hardening.sh
+29627769a699a414eb5d9e32db8ac60a17bef3266f62c860bf99c4ef6ccfda3a  server/hardening.sh
 ea8630d71dea83c8c2e6fc6270ee91a515dcd04208e8eb9eaa4308798cad0ca4  server/jump.sh
 
 # PVE Scripts

@@ -17,6 +17,8 @@ case "${1:-}" in
         echo "Options:"
         echo "  --help, -h       Show this help message"
         echo "  --dry-run, -n    Preview changes without updating files"
+        echo "  --verify, -c     Verify existing checksums"
+        echo "  --version, -v    Show version information"
         echo
         echo "Requirements:"
         echo "  - Must be run from lab repository root directory"
@@ -54,10 +56,6 @@ case "${1:-}" in
         echo "  git add CHECKSUMS.txt bootstrap.sh.sha256"
         echo "  git commit -m 'Update checksums'"
         echo "  git push"
-        echo
-        echo "Additional options:"
-        echo "  --verify, -c     Verify existing checksums against files"
-        echo "  --version, -v    Show version information"
         exit 0
         ;;
 esac
@@ -516,9 +514,11 @@ show_summary() {
         echo "  ${C_CYAN}git diff $CHECKSUMS_FILE${C_RESET}"
         echo
         print_info "Commit workflow:"
-        echo "${C_CYAN}git add $CHECKSUMS_FILE $BOOTSTRAP_CHECKSUM$ && \\${C_RESET}"
+        echo "${C_CYAN}git add $CHECKSUMS_FILE $BOOTSTRAP_CHECKSUM && \\${C_RESET}"
         echo "${C_CYAN}git commit -m 'Update checksums' && \\${C_RESET}"
         echo "${C_CYAN}git push${C_RESET}"
+        echo
+        print_info "Other options: ${C_CYAN}--verify${C_RESET} to validate, ${C_CYAN}--version${C_RESET} for info"
     fi
     draw_separator
 }

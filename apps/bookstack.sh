@@ -927,25 +927,18 @@ configure_ufw() {
         return 0
     fi
     
-    # Check if UFW is available
-    if ! command_exists ufw; then
-        log INFO "UFW not installed - skipping firewall configuration"
-        echo
-        return 0
-    fi
-    
-    # Test if UFW is functional (may fail in unprivileged containers)
-    local ufw_test_output
-    if ! ufw_test_output=$(sudo ufw status 2>&1); then
-        log WARN "UFW not functional in this environment"
-        log INFO "Error: $ufw_test_output"
+    # Test if UFW is available and functional
+    local ufw_status
+    if ! ufw_status=$(sudo ufw status 2>&1); then
+        log WARN "UFW not available or not functional"
+        log INFO "Output: $ufw_status"
         log INFO "Configure firewall on the host instead"
         echo
         return 0
     fi
     
     # Check if UFW is active
-    if ! echo "$ufw_test_output" | grep -q "Status: active"; then
+    if ! echo "$ufw_status" | grep -q "Status: active"; then
         log INFO "UFW is not active - skipping firewall configuration"
         log INFO "To enable UFW manually: sudo ufw enable"
         echo
@@ -956,7 +949,7 @@ configure_ufw() {
     print_step "Adding firewall rules..."
     
     # Allow HTTP
-    if echo "$ufw_test_output" | grep -qE "80/tcp.*ALLOW"; then
+    if echo "$ufw_status" | grep -qE "80/tcp.*ALLOW"; then
         log SUCCESS "Port 80/tcp already allowed"
     else
         if sudo ufw allow 80/tcp comment "BookStack HTTP" >> "$LOG_FILE" 2>&1; then

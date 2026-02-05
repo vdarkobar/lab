@@ -3,12 +3,8 @@
 # Algorithm: SHA256
 #
 # Format: checksum  filepath
-# 
+#
 # Verify with: sha256sum -c CHECKSUMS.txt
-
-# Libraries
-070ab30f8e7f52c3bc0ecc594065971165720bf5ca6660e5c97693294a89df65  lib/formatting.sh
-2b85d02194c304fc1189e53d8a18b0d9a4eb1595d6b4d5066df14157a55946e0  lib/helpers.sh
 
 # Server Scripts
 29627769a699a414eb5d9e32db8ac60a17bef3266f62c860bf99c4ef6ccfda3a  server/hardening.sh

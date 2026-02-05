@@ -5,10 +5,10 @@
 # Source: https://github.com/vdarkobar/lab                                  #
 #                                                                           #
 # This script:                                                              #
-#   1. Creates directory structure (lib/, server/, apps/)                   #
+#   1. Creates directory structure (server/, apps/, pve/)                   #
 #   2. Downloads all components from GitHub                                 #
 #   3. Verifies checksums for security                                      #
-#   4. Runs hardening.sh                                                    #
+#   4. Presents menu to run setup scripts                                   #
 #                                                                           #
 # INSTALLATION METHODS:                                                     #
 #                                                                           #
@@ -41,7 +41,7 @@ case "${1:-}" in
         echo "  Secure: Download, verify checksum, then run"
         echo
         echo "What it does:"
-        echo "  - Creates directory structure: ~/lab/{lib,server,apps,pve}"
+        echo "  - Creates directory structure: ~/lab/{server,apps,pve}"
         echo "  - Downloads all components from GitHub"
         echo "  - Verifies SHA256 checksums for security"
         echo "  - Presents menu to run setup scripts"
@@ -78,12 +78,12 @@ readonly INSTALL_DIR="$HOME/lab"
 # Check if terminal supports colors
 if [[ -t 1 ]] && command -v tput >/dev/null 2>&1 && tput setaf 1 >/dev/null 2>&1; then
     COLORS_SUPPORTED=true
-    
+
     # Colors
     readonly C_RESET=$(tput sgr0)
     readonly C_BOLD=$(tput bold)
     readonly C_DIM=$(tput dim)
-    
+
     # Foreground colors
     readonly C_BLACK=$(tput setaf 0)
     readonly C_RED=$(tput setaf 1)
@@ -93,7 +93,7 @@ if [[ -t 1 ]] && command -v tput >/dev/null 2>&1 && tput setaf 1 >/dev/null 2>&1
     readonly C_MAGENTA=$(tput setaf 5)
     readonly C_CYAN=$(tput setaf 6)
     readonly C_WHITE=$(tput setaf 7)
-    
+
     # Bright colors (if supported)
     readonly C_BRIGHT_GREEN=$(tput setaf 10 2>/dev/null || tput setaf 2)
     readonly C_BRIGHT_RED=$(tput setaf 9 2>/dev/null || tput setaf 1)
@@ -191,7 +191,7 @@ draw_box() {
     local text_len=${#text}
     local padding=$(( (width - text_len - 2) / 2 ))
     local padding_right=$(( width - text_len - padding - 2 ))
-    
+
     echo "${C_CYAN}"
     echo "╔$(printf '═%.0s' $(seq 1 $width))╗"
     printf "║%*s%s%*s║\n" $((padding + 1)) "" "$text" $((padding_right + 1)) ""
@@ -211,7 +211,7 @@ log() {
     local level="$1"
     shift
     local message="$*"
-    
+
     case "$level" in
         SUCCESS) print_success "$message" ;;
         ERROR)   print_error "$message" ;;
@@ -236,7 +236,7 @@ trap 'print_error "Error on line $LINENO: $BASH_COMMAND"' ERR
 
 create_directories() {
     print_header "Creating Directory Structure"
-    
+
     if [[ -d "$INSTALL_DIR" ]]; then
         print_warning "Directory $INSTALL_DIR already exists"
         echo
@@ -249,19 +249,18 @@ create_directories() {
             die "Installation cancelled"
         fi
     fi
-    
+
     local directories=(
-        "$INSTALL_DIR/lib"
         "$INSTALL_DIR/server"
         "$INSTALL_DIR/apps"
         "$INSTALL_DIR/pve"
     )
-    
+
     for dir in "${directories[@]}"; do
         mkdir -p "$dir"
         print_success "Created: ${dir/$HOME/~}"
     done
-    
+
     echo
 }
 
@@ -273,19 +272,19 @@ download_file() {
     local url="$1"
     local output="$2"
     local retries=3
-    
+
     for ((i=1; i<=retries; i++)); do
         if wget -q --show-progress "$url" -O "$output" 2>/dev/null || \
            curl -fsSL "$url" -o "$output" 2>/dev/null; then
             return 0
         fi
-        
+
         if [[ $i -lt $retries ]]; then
             print_warning "Download failed, retrying ($i/$retries)..."
             sleep 2
         fi
     done
-    
+
     return 1
 }
 
@@ -295,22 +294,20 @@ download_file() {
 
 download_components() {
     print_header "Downloading Components"
-    
+
     cd "$INSTALL_DIR" || die "Cannot change to $INSTALL_DIR"
-    
+
     # Download master checksums file
     print_step "Downloading checksums manifest..."
     if ! download_file "$REPO_URL/CHECKSUMS.txt" "CHECKSUMS.txt"; then
         die "Failed to download CHECKSUMS.txt"
     fi
     print_success "Downloaded: CHECKSUMS.txt"
-    
+
     echo
-    
+
     # List of files to download: path|display_name
     local files=(
-        "lib/formatting.sh|Formatting Library"
-        "lib/helpers.sh|Helper Functions Library"
         "server/hardening.sh|Hardening Script"
         "server/jump.sh|Jump Server Script"
         "pve/debvm.sh|Debian VM Template Script"
@@ -324,21 +321,22 @@ download_components() {
         "apps/bookstack.sh|Bookstack Wiki Installer"
         "apps/bentopdf.sh|BentoPDF editor Installer"
     )
-    
+
     # Download each file
     for file_entry in "${files[@]}"; do
         IFS='|' read -r file_path display_name <<< "$file_entry"
-        
+
         print_step "Downloading $display_name..."
         if ! download_file "$REPO_URL/$file_path" "$file_path"; then
             print_warning "Optional file not available: $file_path (skipped)"
             continue
         fi
-        
-        local size=$(stat -c%s "$file_path" 2>/dev/null || stat -f%z "$file_path" 2>/dev/null || echo "unknown")
+
+        local size
+        size=$(stat -c%s "$file_path" 2>/dev/null || stat -f%z "$file_path" 2>/dev/null || echo "unknown")
         print_success "Downloaded: $file_path (${size} bytes)"
     done
-    
+
     echo
 }
 
@@ -348,43 +346,47 @@ download_components() {
 
 verify_checksums() {
     print_header "Verifying Checksums"
-    
+
     cd "$INSTALL_DIR" || die "Cannot change to $INSTALL_DIR"
-    
+
     local verification_failed=false
     local verified_count=0
     local skipped_count=0
     local unverified_count=0
-    
+
     # Build list of files that have checksums
     local -a checksum_files=()
     while IFS= read -r line; do
         [[ "$line" =~ ^#.*$ ]] && continue
         [[ -z "$line" ]] && continue
-        local file_path=$(echo "$line" | awk '{print $2}')
+        local file_path
+        file_path=$(echo "$line" | awk '{print $2}')
         checksum_files+=("$file_path")
     done < CHECKSUMS.txt
-    
+
     # Verify files listed in CHECKSUMS.txt
     while IFS= read -r line; do
         # Skip comments and empty lines
         [[ "$line" =~ ^#.*$ ]] && continue
         [[ -z "$line" ]] && continue
-        
+
         # Parse checksum line: "hash  filename"
-        local expected_hash=$(echo "$line" | awk '{print $1}')
-        local file_path=$(echo "$line" | awk '{print $2}')
-        
+        local expected_hash
+        expected_hash=$(echo "$line" | awk '{print $1}')
+        local file_path
+        file_path=$(echo "$line" | awk '{print $2}')
+
         # Skip if file doesn't exist (optional files)
         if [[ ! -f "$file_path" ]]; then
             ((skipped_count++)) || true
             continue
         fi
-        
+
         print_step "Verifying $file_path..."
-        
-        local actual_hash=$(sha256sum "$file_path" | awk '{print $1}')
-        
+
+        local actual_hash
+        actual_hash=$(sha256sum "$file_path" | awk '{print $1}')
+
         if [[ "$actual_hash" == "$expected_hash" ]]; then
             print_success "$file_path: OK"
             ((verified_count++)) || true
@@ -395,11 +397,9 @@ verify_checksums() {
             verification_failed=true
         fi
     done < CHECKSUMS.txt
-    
+
     # Check for downloaded files not in CHECKSUMS.txt
     local downloaded_files=(
-        "lib/formatting.sh"
-        "lib/helpers.sh"
         "server/hardening.sh"
         "server/jump.sh"
         "pve/debvm.sh"
@@ -413,11 +413,11 @@ verify_checksums() {
         "apps/bookstack.sh"
         "apps/bentopdf.sh"
     )
-    
+
     for file_path in "${downloaded_files[@]}"; do
         # Skip if file wasn't downloaded
         [[ ! -f "$file_path" ]] && continue
-        
+
         # Check if file is in checksum list
         local found=false
         for checksum_file in "${checksum_files[@]}"; do
@@ -426,26 +426,26 @@ verify_checksums() {
                 break
             fi
         done
-        
+
         if [[ "$found" == false ]]; then
             print_warning "$file_path: NO CHECKSUM (not in CHECKSUMS.txt)"
             ((unverified_count++)) || true
         fi
     done
-    
+
     echo
-    
+
     if [[ "$verification_failed" == true ]]; then
         die "Checksum verification failed! Installation aborted."
     fi
-    
+
     print_success "All verified checksums passed"
     print_kv "Files verified" "$verified_count"
     print_kv "Files skipped" "$skipped_count"
     if [[ $unverified_count -gt 0 ]]; then
         print_kv "Files unverified" "$unverified_count"
     fi
-    
+
     echo
 }
 
@@ -455,7 +455,7 @@ verify_checksums() {
 
 show_menu() {
     print_header "What would you like to do?"
-    
+
     echo
     printf "  ${C_BOLD}1)${C_RESET} Create Debian VM Template  ${C_DIM}(debvm.sh - runs on PVE host)${C_RESET}\n"
     printf "  ${C_BOLD}2)${C_RESET} Create Debian LXC Template ${C_DIM}(deblxc.sh - runs on PVE host)${C_RESET}\n"
@@ -463,11 +463,11 @@ show_menu() {
     printf "  ${C_BOLD}4)${C_RESET} Setup Jump Server          ${C_DIM}(jump.sh - runs in VM/LXC)${C_RESET}\n"
     printf "  ${C_BOLD}5)${C_RESET} Exit\n"
     echo
-    
+
     while true; do
         printf "%b" "${C_CYAN}Select option [1-5]:${C_RESET} "
         read -r choice
-        
+
         case "$choice" in
             1)
                 run_vm_template_creation
@@ -502,7 +502,7 @@ show_menu() {
 
 run_vm_template_creation() {
     print_header "Creating Debian VM Template"
-    
+
     # Check if running on Proxmox VE
     if [[ ! -f /etc/pve/.version ]]; then
         print_error "This option must run on Proxmox VE host"
@@ -511,17 +511,17 @@ run_vm_template_creation() {
         print_warning "To create templates, run bootstrap.sh on PVE host"
         exit 1
     fi
-    
+
     print_success "Proxmox VE detected"
-    
+
     cd "$INSTALL_DIR/pve" || die "Cannot change to pve directory"
-    
+
     chmod +x debvm.sh
-    
+
     echo
     print_step "Launching debvm.sh..."
     echo
-    
+
     if ./debvm.sh; then
         echo
         print_success "VM template creation completed!"
@@ -538,7 +538,7 @@ run_vm_template_creation() {
 
 run_lxc_template_creation() {
     print_header "Creating Debian LXC Template"
-    
+
     # Check if running on Proxmox VE
     if [[ ! -f /etc/pve/.version ]]; then
         print_error "This option must run on Proxmox VE host"
@@ -547,11 +547,11 @@ run_lxc_template_creation() {
         print_warning "To create templates, run bootstrap.sh on PVE host"
         exit 1
     fi
-    
+
     print_success "Proxmox VE detected"
-    
+
     cd "$INSTALL_DIR/pve" || die "Cannot change to pve directory"
-    
+
     # Check if deblxc.sh exists
     if [[ ! -f "deblxc.sh" ]]; then
         print_error "deblxc.sh not found"
@@ -561,13 +561,13 @@ run_lxc_template_creation() {
         printf "  %b\n" "${C_CYAN}https://github.com/vdarkobar/lab${C_RESET}"
         exit 1
     fi
-    
+
     chmod +x deblxc.sh
-    
+
     echo
     print_step "Launching deblxc.sh..."
     echo
-    
+
     if ./deblxc.sh; then
         echo
         print_success "LXC template creation completed!"
@@ -584,16 +584,17 @@ run_lxc_template_creation() {
 
 run_hardening() {
     print_header "Server Hardening"
-    
+
     # Check if running on Debian
     if [[ ! -f /etc/debian_version ]]; then
         print_error "This option must run on Debian system"
         print_kv "Detected" "Not Debian"
         exit 1
     fi
-    
+
     # Check Debian version
-    local debian_version=$(cat /etc/debian_version)
+    local debian_version
+    debian_version=$(cat /etc/debian_version)
     if [[ ! "$debian_version" =~ ^13 ]]; then
         print_warning "Expected Debian 13, found version: $debian_version"
         printf "%b" "${C_CYAN}Continue anyway?${C_RESET} ${C_DIM}(yes/no)${C_RESET} "
@@ -604,7 +605,7 @@ run_hardening() {
     else
         print_success "Debian 13 detected"
     fi
-    
+
     # Check for sudo (required - must run as non-root user with sudo)
     if ! command -v sudo >/dev/null 2>&1; then
         print_error "sudo is not installed"
@@ -619,7 +620,7 @@ run_hardening() {
         print_info "Then run hardening.sh as that non-root user"
         exit 1
     fi
-    
+
     # Check if running as root (should not be)
     if [[ $EUID -eq 0 ]]; then
         print_error "Do not run hardening as root!"
@@ -634,19 +635,19 @@ run_hardening() {
         printf "  %b\n" "${C_CYAN}cd ~/lab/server && ./hardening.sh${C_RESET}"
         exit 1
     fi
-    
+
     print_success "Running as non-root user: ${C_BOLD}$(whoami)${C_RESET}"
     print_success "sudo is available"
-    
+
     # Run hardening
     cd "$INSTALL_DIR/server" || die "Cannot change to server directory"
-    
+
     chmod +x hardening.sh
-    
+
     echo
     print_step "Launching hardening.sh..."
     echo
-    
+
     if ./hardening.sh; then
         echo
         print_success "Hardening completed!"
@@ -663,16 +664,17 @@ run_hardening() {
 
 run_jump_server() {
     print_header "Jump Server Setup"
-    
+
     # Check if running on Debian
     if [[ ! -f /etc/debian_version ]]; then
         print_error "This option must run on Debian system"
         print_kv "Detected" "Not Debian"
         exit 1
     fi
-    
+
     # Check Debian version
-    local debian_version=$(cat /etc/debian_version)
+    local debian_version
+    debian_version=$(cat /etc/debian_version)
     if [[ ! "$debian_version" =~ ^13 ]]; then
         print_warning "Expected Debian 13, found version: $debian_version"
         printf "%b" "${C_CYAN}Continue anyway?${C_RESET} ${C_DIM}(yes/no)${C_RESET} "
@@ -683,7 +685,7 @@ run_jump_server() {
     else
         print_success "Debian 13 detected"
     fi
-    
+
     # Check for sudo (required - must run as non-root user with sudo)
     if ! command -v sudo >/dev/null 2>&1; then
         print_error "sudo is not installed"
@@ -698,7 +700,7 @@ run_jump_server() {
         print_info "Then run jump.sh as that non-root user"
         exit 1
     fi
-    
+
     # Check if running as root (should not be)
     if [[ $EUID -eq 0 ]]; then
         print_error "Do not run as root!"
@@ -713,13 +715,13 @@ run_jump_server() {
         printf "  %b\n" "${C_CYAN}cd ~/lab/server && ./jump.sh${C_RESET}"
         exit 1
     fi
-    
+
     print_success "Running as non-root user: ${C_BOLD}$(whoami)${C_RESET}"
     print_success "sudo is available"
-    
+
     # Run jump server setup
     cd "$INSTALL_DIR/server" || die "Cannot change to server directory"
-    
+
     # Check if jump.sh exists
     if [[ ! -f "jump.sh" ]]; then
         print_error "jump.sh not found"
@@ -729,13 +731,13 @@ run_jump_server() {
         printf "  %b\n" "${C_CYAN}https://github.com/vdarkobar/lab${C_RESET}"
         exit 1
     fi
-    
+
     chmod +x jump.sh
-    
+
     echo
     print_step "Launching jump.sh..."
     echo
-    
+
     if ./jump.sh; then
         echo
         print_success "Jump Server setup completed!"
@@ -754,7 +756,7 @@ cleanup() {
     local exit_code=$?
     # Remove error trap to avoid recursion
     trap - ERR
-    
+
     if [[ $exit_code -ne 0 ]]; then
         echo
         print_error "Installation failed"
@@ -774,7 +776,7 @@ trap cleanup EXIT
 
 preflight_checks() {
     print_header "Pre-flight Checks"
-    
+
     # Check for required tools
     if command -v wget >/dev/null 2>&1; then
         print_success "wget is available"
@@ -783,13 +785,13 @@ preflight_checks() {
     else
         die "Either wget or curl is required"
     fi
-    
+
     if command -v sha256sum >/dev/null 2>&1; then
         print_success "sha256sum is available"
     else
         die "sha256sum is required"
     fi
-    
+
     echo
 }
 
@@ -801,18 +803,17 @@ show_summary() {
     echo
     draw_separator
     echo
-    
+
     print_header "Installation Summary"
     print_kv "Install Directory" "${INSTALL_DIR/$HOME/~}"
     print_kv "Version" "$SCRIPT_VERSION"
-    
+
     echo
     print_header "Directory Structure"
-    print_subheader "lib/     - Shared libraries"
     print_subheader "server/  - Server scripts (hardening, jump)"
     print_subheader "apps/    - Application installers"
     print_subheader "pve/     - Proxmox VE scripts"
-    
+
     echo
 }
 
@@ -823,17 +824,17 @@ show_summary() {
 main() {
     # Clear screen if running directly (not piped)
     [[ -t 1 ]] && clear || true
-    
+
     draw_box "Lab Bootstrap v${SCRIPT_VERSION}"
     printf "%*s${C_DIM}https://github.com/vdarkobar/lab${C_RESET}\n" 18 ""
-    
+
     # Run installation steps
     preflight_checks
     create_directories
     download_components
     verify_checksums
     show_summary
-    
+
     # Show menu for what to do next
     show_menu
 }

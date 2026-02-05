@@ -1,34 +1,24 @@
 #!/bin/bash
+readonly SCRIPT_VERSION="2.1.0"
+readonly SCRIPT_NAME="bookstack"
 
-###################################################################################
-# BookStack Wiki Installer - Debian 13 (Trixie)                                   #
-###################################################################################
-
-readonly SCRIPT_VERSION="2.0.0"
-
-# Handle --help flag early (before defining functions)
+# Handle --help early (before defining functions)
 case "${1:-}" in
     --help|-h)
         echo "BookStack Wiki Installer v${SCRIPT_VERSION}"
         echo
-        echo "Usage: $0 [--help|--status|--logs|--uninstall]"
-        echo
-        echo "Installation:"
-        echo "  bootstrap.sh → hardening.sh → Select \"BookStack Wiki\""
-        echo "  Or run directly: ./bookstack.sh"
+        echo "Usage: $0 [--help] [--status] [--logs [N]] [--configure] [--uninstall]"
         echo
         echo "Requirements:"
         echo "  - Must run as NON-ROOT user with sudo privileges"
         echo "  - Do NOT run with: sudo $0"
         echo "  - Debian 13 (Trixie) required"
         echo "  - Fresh server (no existing Apache/MySQL)"
+        echo "  - Internet connectivity required"
         echo
-        echo "Environment variables:"
-        echo "  BOOKSTACK_DOMAIN       Domain or IP to host BookStack (required for silent)"
-        echo "  BOOKSTACK_DIR          Install directory (default: /var/www/bookstack)"
-        echo "  BOOKSTACK_SILENT       Run non-interactively (true/false)"
-        echo "  BOOKSTACK_SKIP_UFW     Skip UFW configuration (true/false)"
-        echo "  SKIP_REBOOT            Skip reboot prompt (true/false)"
+        echo "Installation:"
+        echo "  bootstrap.sh → hardening.sh → Select \"BookStack Wiki\""
+        echo "  OR run standalone after hardening"
         echo
         echo "What it does:"
         echo "  - Installs Apache, PHP 8.4, MariaDB"
@@ -37,15 +27,26 @@ case "${1:-}" in
         echo "  - Sets up Apache virtual host"
         echo "  - Configures UFW firewall rules"
         echo
+        echo "Environment variables:"
+        echo "  BOOKSTACK_DOMAIN          Domain or IP to host BookStack (required for silent)"
+        echo "  BOOKSTACK_DIR             Install directory (default: /var/www/bookstack)"
+        echo "  BOOKSTACK_SILENT=true     Non-interactive mode"
+        echo "  BOOKSTACK_SKIP_UFW=true   Skip firewall configuration"
+        echo "  BOOKSTACK_SKIP_REBOOT=true  Skip reboot prompt"
+        echo
         echo "Post-install commands:"
         echo "  --status      Show BookStack status and access info"
         echo "  --logs [N]    Show last N lines of Apache logs (default: 50)"
+        echo "  --configure   Reconfigure domain and restart services"
         echo "  --uninstall   Remove BookStack and clean up"
+        echo
+        echo "Network requirements:"
+        echo "  Inbound 80/tcp    HTTP access (BookStack web interface)"
         echo
         echo "Files created:"
         echo "  /var/www/bookstack/              Application directory"
-        echo "  /etc/apache2/sites-enabled/     Virtual host config"
-        echo "  /var/log/lab/bookstack-*.log    Installation log"
+        echo "  /etc/apache2/sites-enabled/      Virtual host config"
+        echo "  /var/log/lab/bookstack-*.log     Installation logs"
         echo
         echo "Default credentials (change immediately!):"
         echo "  Email:    admin@admin.com"
@@ -61,80 +62,45 @@ case "${1:-}" in
         ;;
 esac
 
-###################################################################################
-#                                                                                 #
-# DESCRIPTION:                                                                    #
-#   Installs BookStack wiki application on Debian 13 (Trixie) with Apache,       #
-#   PHP 8.4, and MariaDB. Based on official BookStack installation scripts.       #
-#                                                                                 #
-# LOCATION: lab/apps/bookstack.sh                                                 #
-# REPOSITORY: https://github.com/vdarkobar/lab                                    #
-#                                                                                 #
-# EXECUTION REQUIREMENTS:                                                         #
-#   - Must be run as a NON-ROOT user                                              #
-#   - User must have sudo privileges                                              #
-#   - Script will use sudo internally for privileged operations                   #
-#                                                                                 #
-# CORRECT USAGE:                                                                  #
-#   ./bookstack.sh                                                                #
-#                                                                                 #
-# INCORRECT USAGE:                                                                #
-#   sudo ./bookstack.sh  ← DO NOT DO THIS                                         #
-#   # ./bookstack.sh     ← DO NOT DO THIS                                         #
-#                                                                                 #
-# VERSION: 2.0.0                                                                  #
-# LICENSE: MIT                                                                    #
-#                                                                                 #
-###################################################################################
-
-set -euo pipefail  # Exit on error, undefined vars, pipe failures
+set -euo pipefail
+export DEBIAN_FRONTEND=noninteractive
 
 # Track services we stop (to restart on cleanup)
 UNATTENDED_UPGRADES_WAS_ACTIVE=false
 
-###################################################################################
-# Script Configuration                                                            #
-###################################################################################
-
-readonly SCRIPT_NAME="bookstack"
-
-# Logging
-readonly LOG_DIR="/var/log/lab"
-readonly LOG_FILE="${LOG_DIR}/${SCRIPT_NAME}-$(date +%Y%m%d-%H%M%S).log"
-readonly LOG_LATEST="${LOG_DIR}/${SCRIPT_NAME}.log"
-
-# BookStack configuration
+# BookStack configuration (env overrides)
 BOOKSTACK_DOMAIN="${BOOKSTACK_DOMAIN:-}"
 BOOKSTACK_DIR="${BOOKSTACK_DIR:-/var/www/bookstack}"
-BOOKSTACK_SILENT="${BOOKSTACK_SILENT:-false}"
-BOOKSTACK_SKIP_UFW="${BOOKSTACK_SKIP_UFW:-false}"
-SKIP_REBOOT="${SKIP_REBOOT:-false}"
+BOOKSTACK_SILENT="${BOOKSTACK_SILENT:-false}"; SILENT="$BOOKSTACK_SILENT"
+BOOKSTACK_SKIP_UFW="${BOOKSTACK_SKIP_UFW:-false}"; SKIP_FIREWALL="$BOOKSTACK_SKIP_UFW"
+BOOKSTACK_SKIP_REBOOT="${BOOKSTACK_SKIP_REBOOT:-false}"
 
 # Database configuration (generated during install)
 readonly DB_NAME="bookstack"
 readonly DB_USER="bookstack"
 DB_PASS=""  # Generated later
 
-# Export for non-interactive apt
-export DEBIAN_FRONTEND=noninteractive
+# Composer env
 export COMPOSER_ALLOW_SUPERUSER=1
 export COMPOSER_NO_INTERACTION=1
 export COMPOSER_DISABLE_XDEBUG_WARN=1
 
-###################################################################################
-# Terminal Formatting (embedded - no external dependency)                         #
-###################################################################################
+# Logging
+readonly LOG_DIR="/var/log/lab"
+readonly LOG_FILE="${LOG_DIR}/${SCRIPT_NAME}-$(date +%Y%m%d-%H%M%S).log"
+
+#############################################################################
+# Terminal Formatting (embedded - no external dependency)                   #
+#############################################################################
 
 # Check if terminal supports colors
 if [[ -t 1 ]] && command -v tput >/dev/null 2>&1 && tput setaf 1 >/dev/null 2>&1; then
     COLORS_SUPPORTED=true
     
-    # Colors
     readonly C_RESET=$(tput sgr0)
     readonly C_BOLD=$(tput bold)
     readonly C_DIM=$(tput dim)
     
-    # Foreground colors
     readonly C_RED=$(tput setaf 1)
     readonly C_GREEN=$(tput setaf 2)
     readonly C_YELLOW=$(tput setaf 3)
@@ -142,7 +108,6 @@ if [[ -t 1 ]] && command -v tput >/dev/null 2>&1 && tput setaf 1 >/dev/null 2>&1
     readonly C_CYAN=$(tput setaf 6)
     readonly C_WHITE=$(tput setaf 7)
     
-    # Bright colors (if supported)
     readonly C_BRIGHT_GREEN=$(tput setaf 10 2>/dev/null || tput setaf 2)
     readonly C_BRIGHT_RED=$(tput setaf 9 2>/dev/null || tput setaf 1)
     readonly C_BRIGHT_YELLOW=$(tput setaf 11 2>/dev/null || tput setaf 3)
@@ -172,7 +137,6 @@ if [[ "${LANG:-}" =~ UTF-8 ]] || [[ "${LC_ALL:-}" =~ UTF-8 ]]; then
     readonly SYMBOL_INFO="ℹ"
     readonly SYMBOL_ARROW="→"
     readonly SYMBOL_BULLET="•"
-    readonly SPINNER_CHARS='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
 else
     readonly SYMBOL_SUCCESS="+"
     readonly SYMBOL_ERROR="x"
@@ -180,12 +144,21 @@ else
     readonly SYMBOL_INFO="i"
     readonly SYMBOL_ARROW=">"
     readonly SYMBOL_BULLET="*"
+fi
+
+#############################################################################
+# Spinner Characters (optional - only needed if run_with_spinner is used)  #
+#############################################################################
+
+if [[ "${LANG:-}" =~ UTF-8 ]] || [[ "${LC_ALL:-}" =~ UTF-8 ]]; then
+    readonly SPINNER_CHARS='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+else
     readonly SPINNER_CHARS='|/-\'
 fi
 
-###################################################################################
-# Output Functions                                                                #
-###################################################################################
+#############################################################################
+# Output Functions                                                          #
+#############################################################################
 
 print_success() {
     local msg="$*"
@@ -229,9 +202,9 @@ print_kv() {
     printf "${C_CYAN}%-20s${C_RESET} ${C_WHITE}%s${C_RESET}\n" "$key:" "$value"
 }
 
-###################################################################################
-# Visual Elements                                                                 #
-###################################################################################
+#############################################################################
+# Visual Elements                                                           #
+#############################################################################
 
 draw_box() {
     local text="$1"
@@ -249,15 +222,15 @@ draw_separator() {
     echo "${C_DIM}$(printf '─%.0s' $(seq 1 70))${C_RESET}"
 }
 
-###################################################################################
-# Logging                                                                         #
-###################################################################################
+#############################################################################
+# Logging                                                                   #
+#############################################################################
 
 log() {
-    local level="$1"
-    shift
+    local level="$1"; shift
     local message="$*"
-    local timestamp=$(date +"%Y-%m-%d %H:%M:%S")
+    local timestamp
+    timestamp=$(date +"%Y-%m-%d %H:%M:%S")
     
     # Write plain text to log file (strip ANSI color codes)
     if [[ -n "${LOG_FILE:-}" ]] && [[ -w "${LOG_FILE:-}" || -w "$(dirname "${LOG_FILE:-/tmp}")" ]]; then
@@ -276,24 +249,44 @@ log() {
 }
 
 die() {
-    log ERROR "$@"
+    local msg="$*"
+    log ERROR "$msg"
     exit 1
 }
 
-# Error trap for better debugging
-trap 'print_error "Error on line $LINENO: $BASH_COMMAND"' ERR
+setup_logging() {
+    # Note: sudo existence check should be done BEFORE calling this function
+    
+    # Create log directory with sudo
+    if [[ ! -d "$LOG_DIR" ]]; then
+        sudo mkdir -p "$LOG_DIR" 2>/dev/null || true
+    fi
+    
+    # Create log file and set ownership to current user
+    sudo touch "$LOG_FILE" 2>/dev/null || true
+    sudo chown "$(whoami):$(id -gn)" "$LOG_FILE" 2>/dev/null || true
+    sudo chmod 644 "$LOG_FILE" 2>/dev/null || true
+    
+    log INFO "=== ${SCRIPT_NAME} Started ==="
+    log INFO "Version: $SCRIPT_VERSION"
+    log INFO "User: $(whoami)"
+    log INFO "Date: $(date)"
+}
 
-###################################################################################
-# Cleanup Handler                                                                 #
-###################################################################################
+# Error trap for better debugging (set after print_error is defined)
+trap 'print_error "Error at line $LINENO: $BASH_COMMAND"; log ERROR "Error at line $LINENO: $BASH_COMMAND"' ERR
+
+#############################################################################
+# Cleanup / Restore Services                                                #
+#############################################################################
 
 cleanup() {
     local exit_code=$?
     
-    # Restore unattended-upgrades if we stopped it
+    # Restart unattended-upgrades if we stopped it
     if [[ "$UNATTENDED_UPGRADES_WAS_ACTIVE" == true ]]; then
         if sudo systemctl start unattended-upgrades 2>/dev/null; then
-            print_info "Restored unattended-upgrades service"
+            print_info "Restarted unattended-upgrades service"
         fi
     fi
     
@@ -306,12 +299,12 @@ cleanup() {
 
 trap cleanup EXIT INT TERM
 
-###################################################################################
-# Helper Functions                                                                #
-###################################################################################
+#############################################################################
+# Helper Functions                                                          #
+#############################################################################
 
 is_silent() {
-    [[ "$BOOKSTACK_SILENT" == "true" ]]
+    [[ "${SILENT:-false}" == "true" ]]
 }
 
 command_exists() {
@@ -322,6 +315,11 @@ service_is_active() {
     systemctl is-active --quiet "$1" 2>/dev/null
 }
 
+service_is_enabled() {
+    systemctl is-enabled --quiet "$1" 2>/dev/null
+}
+
+# Uses ip route first, hostname -I as fallback
 get_local_ip() {
     local ip_address
     ip_address=$(ip route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}')
@@ -339,72 +337,101 @@ generate_password() {
     printf '%s' "${password:0:$length}"
 }
 
-###################################################################################
-# Spinner for Long Operations                                                     #
-###################################################################################
+#############################################################################
+# Spinner for Long Operations (optional)                                    #
+#############################################################################
+
+# Run a command with an animated spinner, elapsed timer, and log capture.
+# All command output is redirected to LOG_FILE. Console shows a spinner
+# that resolves to ✓/✗ on completion with elapsed time.
+#
+# Usage:
+#   if ! run_with_spinner "Installing packages" sudo apt-get install -y pkg; then
+#       die "Failed to install packages"
+#   fi
+#
+# Notes:
+#   - Command runs in a background subshell (trap ERR does not fire for it)
+#   - Safe with set -e: uses 'wait || exit_code=$?' to prevent errexit from
+#     killing the function before cleanup (temp file removal, log capture)
+#   - Exit code is preserved and returned to caller
+#   - Falls back to running without spinner if mktemp fails
 
 run_with_spinner() {
     local msg="$1"
     shift
-    local pid tmp exit_code i=0 start_ts now_ts elapsed
+    local pid tmp_out exit_code=0
+    local spin_idx=0 start_ts now_ts elapsed
 
-    tmp="$(mktemp)"
+    tmp_out="$(mktemp)" || { log WARN "mktemp failed, running without spinner"; "$@"; return $?; }
     start_ts="$(date +%s)"
 
-    # Run command in background
-    "$@" >"$tmp" 2>&1 &
+    log STEP "$msg" 2>/dev/null || true
+
+    # Run command in background, capture all output
+    "$@" >"$tmp_out" 2>&1 &
     pid=$!
 
+    # Show spinner while command runs
     printf "  %s " "$msg"
     while kill -0 "$pid" 2>/dev/null; do
         now_ts="$(date +%s)"
         elapsed=$((now_ts - start_ts))
-        printf "\r  %s %s (%ds)" "$msg" "${SPINNER_CHARS:i++%${#SPINNER_CHARS}:1}" "$elapsed"
+        printf "\r  %s %s (%ds)" "$msg" "${SPINNER_CHARS:spin_idx++%${#SPINNER_CHARS}:1}" "$elapsed"
         sleep 0.1
     done
 
-    wait "$pid"
-    exit_code=$?
+    # Capture exit code (|| prevents set -e from killing before cleanup)
+    wait "$pid" || exit_code=$?
 
-    # Append output to log file
-    cat "$tmp" >> "$LOG_FILE" 2>/dev/null || true
-    rm -f "$tmp"
-
-    if [[ $exit_code -eq 0 ]]; then
-        printf "\r  %s %s\n" "$msg" "${C_GREEN}${SYMBOL_SUCCESS}${C_RESET}"
-    else
-        printf "\r  %s %s\n" "$msg" "${C_RED}${SYMBOL_ERROR}${C_RESET}"
+    # Append command output to log file
+    if [[ -n "${LOG_FILE:-}" ]] && [[ -w "${LOG_FILE:-}" ]]; then
+        cat "$tmp_out" >> "$LOG_FILE" 2>/dev/null || true
     fi
+    rm -f "$tmp_out"
+
+    # Show result with elapsed time
+    now_ts="$(date +%s)"
+    elapsed=$((now_ts - start_ts))
+    if [[ $exit_code -eq 0 ]]; then
+        printf "\r  %s %s (%ds)\n" "$msg" "${C_GREEN}${SYMBOL_SUCCESS}${C_RESET}" "$elapsed"
+    else
+        printf "\r  %s %s (%ds)\n" "$msg" "${C_RED}${SYMBOL_ERROR}${C_RESET}" "$elapsed"
+    fi
+
     return $exit_code
 }
 
-###################################################################################
-# Setup Logging Directory                                                         #
-###################################################################################
+#############################################################################
+# APT Lock Handling                                                         #
+#############################################################################
 
-setup_logging() {
-    # Create log directory with sudo
-    if [[ ! -d "$LOG_DIR" ]]; then
-        sudo mkdir -p "$LOG_DIR" 2>/dev/null || true
+prepare_apt() {
+    # Stop unattended-upgrades to avoid apt locks (best-effort)
+    if systemctl is-active --quiet unattended-upgrades 2>/dev/null; then
+        UNATTENDED_UPGRADES_WAS_ACTIVE=true
+        sudo systemctl stop unattended-upgrades 2>/dev/null || true
+        print_info "Temporarily stopped unattended-upgrades"
     fi
     
-    # Create log file and set ownership to current user
-    sudo touch "$LOG_FILE" 2>/dev/null || true
-    sudo chown "$(whoami):$(id -gn)" "$LOG_FILE" 2>/dev/null || true
-    sudo chmod 644 "$LOG_FILE" 2>/dev/null || true
-    
-    # Create symlink to latest log
-    sudo ln -sf "$LOG_FILE" "$LOG_LATEST" 2>/dev/null || true
-    
-    log INFO "=== BookStack Installation Started ==="
-    log INFO "Version: $SCRIPT_VERSION"
-    log INFO "User: $(whoami)"
-    log INFO "Date: $(date)"
+    # Wait for dpkg lock (best-effort)
+    local wait_count=0
+    while sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
+        if [[ $wait_count -eq 0 ]]; then
+            print_subheader "Waiting for apt/dpkg lock..."
+        fi
+        wait_count=$((wait_count + 1))
+        sleep 2
+        if [[ $wait_count -ge 60 ]]; then
+            print_warning "Still waiting for apt lock (60s+) — continuing anyway"
+            break
+        fi
+    done
 }
 
-###################################################################################
-# Pre-flight Checks                                                               #
-###################################################################################
+#############################################################################
+# Pre-flight Checks                                                         #
+#############################################################################
 
 preflight_checks() {
     print_header "Pre-flight Checks"
@@ -423,52 +450,63 @@ preflight_checks() {
     fi
     print_success "Running as non-root user: ${C_BOLD}$(whoami)${C_RESET}"
     
-    # Verify sudo access
+    # sudo must exist on minimal images
+    if ! command -v sudo >/dev/null 2>&1; then
+        echo
+        print_error "sudo is not installed. This script requires sudo."
+        echo
+        print_info "Fix (run as root):"
+        echo "  apt-get update && apt-get install -y sudo"
+        echo "  usermod -aG sudo $(whoami)"
+        echo "  # then logout/login"
+        echo
+        die "Execution blocked: sudo not installed"
+    fi
+    
+    # Verify sudo access (may prompt)
     if ! sudo -v 2>/dev/null; then
         echo
         print_error "User $(whoami) does not have sudo privileges"
         echo
-        print_info "To grant sudo access, run as root:"
+        print_info "To grant sudo access (run as root):"
         echo "  ${C_CYAN}usermod -aG sudo $(whoami)${C_RESET}"
-        echo "  ${C_CYAN}# Then logout and login again${C_RESET}"
+        echo "  ${C_CYAN}# then logout/login${C_RESET}"
         echo
         die "Execution blocked: No sudo privileges"
     fi
     print_success "Sudo privileges confirmed"
     
-    # Test sudo authentication
-    if ! sudo -n true 2>/dev/null; then
-        print_info "Sudo authentication required"
-        if ! sudo -v; then
-            die "Sudo authentication failed"
-        fi
-    fi
-    print_success "Sudo authentication successful"
-    
     # Check if running on PVE host (should not be)
     if [[ -f /etc/pve/.version ]] || command_exists pveversion; then
-        die "This script should not run on Proxmox VE host. Run inside a VM or LXC container."
+        die "This script must not run on the Proxmox VE host. Run inside a VM or LXC container."
     fi
     print_success "Not running on Proxmox host"
     
-    # Check Debian version (must be Debian 13)
+    # Check for systemd (required)
+    if ! command_exists systemctl; then
+        die "systemd not found (is this container systemd-enabled?)"
+    fi
+    print_success "systemd available"
+    
+    # Check OS (warn if not Debian, note PHP 8.4 dependency)
     if [[ -f /etc/os-release ]]; then
         . /etc/os-release
-        if [[ "$ID" != "debian" ]]; then
-            die "Unsupported OS: ${ID:-unknown} (Debian required)"
+        if [[ "${ID:-}" != "debian" ]]; then
+            print_warning "Designed for Debian. Detected: ${ID:-unknown}"
+        elif [[ "${VERSION_ID:-}" != "13" ]]; then
+            print_warning "Designed for Debian 13 (Trixie). Detected: ${VERSION_ID:-unknown}"
+            print_warning "PHP 8.4 packages may not be available on other versions"
+        else
+            print_success "Debian 13 (Trixie) detected: ${PRETTY_NAME:-Debian 13}"
         fi
-        if [[ "${VERSION_ID:-}" != "13" ]]; then
-            die "Debian 13 (Trixie) required. Detected: ${VERSION_ID:-unknown}"
-        fi
-        print_success "Debian 13 (Trixie) detected: ${PRETTY_NAME:-Debian 13}"
     else
-        die "/etc/os-release not found - cannot verify OS"
+        print_warning "Cannot determine OS version (/etc/os-release missing)"
     fi
     
     # Fresh server checks (official BookStack requirement)
     if [[ -d "/etc/apache2/sites-enabled" ]] && [[ "$(ls -A /etc/apache2/sites-enabled 2>/dev/null)" ]]; then
-        # Check if it's just the default site
-        local sites_count=$(ls /etc/apache2/sites-enabled 2>/dev/null | wc -l)
+        local sites_count
+        sites_count=$(ls /etc/apache2/sites-enabled 2>/dev/null | wc -l)
         if [[ $sites_count -gt 1 ]] || [[ ! -f /etc/apache2/sites-enabled/000-default.conf ]]; then
             die "Existing Apache configuration found. This script requires a fresh server."
         fi
@@ -483,41 +521,43 @@ preflight_checks() {
     fi
     print_success "Fresh server checks passed"
     
-    # Check internet connectivity
+    # Check internet connectivity (multiple methods for minimal systems)
     print_step "Testing internet connectivity..."
     local internet_ok=false
     
     if command_exists curl; then
-        if curl -s --max-time 5 --head https://github.com >/dev/null 2>&1; then
+        if curl -s --max-time 5 --head https://deb.debian.org >/dev/null 2>&1; then
             print_success "Internet connectivity verified (curl)"
             internet_ok=true
         fi
     fi
     
     if [[ "$internet_ok" == false ]] && command_exists wget; then
-        if wget -q --timeout=5 --spider https://github.com 2>/dev/null; then
+        if wget -q --timeout=5 --spider https://deb.debian.org 2>/dev/null; then
             print_success "Internet connectivity verified (wget)"
             internet_ok=true
         fi
     fi
     
     if [[ "$internet_ok" == false ]]; then
-        if (echo >/dev/tcp/github.com/443) 2>/dev/null; then
-            print_success "Internet connectivity verified (tcp)"
+        # Bash built-in TCP check (no external tools)
+        if timeout 5 bash -c 'cat < /dev/null > /dev/tcp/deb.debian.org/80' 2>/dev/null; then
+            print_success "Internet connectivity verified (dev/tcp)"
             internet_ok=true
         fi
     fi
     
     if [[ "$internet_ok" == false ]]; then
-        print_warning "Could not verify internet - will test during package installation"
+        print_warning "Could not verify internet with available tools"
+        print_info "Will verify connectivity during package installation..."
     fi
     
     echo
 }
 
-###################################################################################
-# Get Domain/IP Configuration                                                     #
-###################################################################################
+#############################################################################
+# Get Domain/IP Configuration                                              #
+#############################################################################
 
 get_domain_configuration() {
     print_header "Domain Configuration"
@@ -567,9 +607,9 @@ get_domain_configuration() {
     echo
 }
 
-###################################################################################
-# Show Introduction                                                               #
-###################################################################################
+#############################################################################
+# Display Introduction                                                      #
+#############################################################################
 
 show_intro() {
     draw_box "BookStack Wiki Installer v${SCRIPT_VERSION}"
@@ -609,12 +649,13 @@ show_intro() {
     echo
 }
 
-###################################################################################
-# Confirm Installation                                                            #
-###################################################################################
+#############################################################################
+# Confirm Installation                                                      #
+#############################################################################
 
 confirm_start() {
     if is_silent; then
+        log INFO "Silent mode - skipping confirmation"
         return 0
     fi
     
@@ -632,7 +673,6 @@ confirm_start() {
                 return 0
                 ;;
             no|n)
-                log INFO "User cancelled installation"
                 print_info "Installation cancelled by user"
                 exit 0
                 ;;
@@ -643,32 +683,14 @@ confirm_start() {
     done
 }
 
-###################################################################################
-# Install System Packages                                                         #
-###################################################################################
+#############################################################################
+# Install System Packages                                                   #
+#############################################################################
 
 install_packages() {
     print_header "Installing System Packages"
     
-    # Stop unattended upgrades if running
-    if systemctl is-active --quiet unattended-upgrades 2>/dev/null; then
-        UNATTENDED_UPGRADES_WAS_ACTIVE=true
-        sudo systemctl stop unattended-upgrades 2>/dev/null || true
-        print_info "Temporarily stopped unattended-upgrades"
-    fi
-    
-    # Wait for apt lock
-    local wait_count=0
-    while sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
-        if [[ $wait_count -eq 0 ]]; then
-            print_subheader "Waiting for apt lock to be released..."
-        fi
-        sleep 2
-        ((wait_count++))
-        if [[ $wait_count -gt 30 ]]; then
-            die "Timed out waiting for apt lock"
-        fi
-    done
+    prepare_apt
     
     # Update package lists
     if ! run_with_spinner "Updating package lists" sudo apt-get update -y; then
@@ -693,9 +715,7 @@ install_packages() {
         php8.4-mysql
     )
     
-    print_step "Installing packages (this may take several minutes)..."
     print_subheader "${C_DIM}${packages[*]}${C_RESET}"
-    
     if ! run_with_spinner "Installing packages" sudo apt-get install -y -q "${packages[@]}"; then
         die "Failed to install packages"
     fi
@@ -704,9 +724,9 @@ install_packages() {
     echo
 }
 
-###################################################################################
-# Configure Database                                                              #
-###################################################################################
+#############################################################################
+# Configure Database                                                        #
+#############################################################################
 
 configure_database() {
     print_header "Configuring Database"
@@ -744,9 +764,9 @@ configure_database() {
     echo
 }
 
-###################################################################################
-# Download BookStack                                                              #
-###################################################################################
+#############################################################################
+# Download BookStack                                                        #
+#############################################################################
 
 download_bookstack() {
     print_header "Downloading BookStack"
@@ -765,16 +785,15 @@ download_bookstack() {
     echo
 }
 
-###################################################################################
-# Configure BookStack                                                             #
-###################################################################################
+#############################################################################
+# Configure BookStack                                                       #
+#############################################################################
 
 configure_bookstack() {
     print_header "Configuring BookStack"
     
     # Download vendor files using BookStack's built-in tool
-    print_step "Downloading PHP dependencies..."
-    if ! run_with_spinner "Downloading vendor files" sudo bash -lc \
+    if ! run_with_spinner "Downloading PHP dependencies" sudo bash -lc \
         "cd '$BOOKSTACK_DIR' && COMPOSER_NO_INTERACTION=1 COMPOSER_ALLOW_SUPERUSER=1 php bookstack-system-cli download-vendor"; then
         die "Failed to download vendor files"
     fi
@@ -794,10 +813,10 @@ configure_bookstack() {
     if ! sudo bash -lc "cd '$BOOKSTACK_DIR' && php artisan key:generate --no-interaction --force" >> "$LOG_FILE" 2>&1; then
         die "Failed to generate application key"
     fi
+    print_success "Application key generated"
     
     # Run database migrations
-    print_step "Running database migrations..."
-    if ! run_with_spinner "Running migrations" sudo bash -lc \
+    if ! run_with_spinner "Running database migrations" sudo bash -lc \
         "cd '$BOOKSTACK_DIR' && php artisan migrate --no-interaction --force"; then
         die "Failed to run database migrations"
     fi
@@ -806,9 +825,9 @@ configure_bookstack() {
     echo
 }
 
-###################################################################################
-# Set File Permissions                                                            #
-###################################################################################
+#############################################################################
+# Set File Permissions                                                      #
+#############################################################################
 
 set_permissions() {
     print_header "Setting File Permissions"
@@ -840,9 +859,9 @@ set_permissions() {
     echo
 }
 
-###################################################################################
-# Configure Apache                                                                #
-###################################################################################
+#############################################################################
+# Configure Apache                                                          #
+#############################################################################
 
 configure_apache() {
     print_header "Configuring Apache"
@@ -913,16 +932,16 @@ EOF
     echo
 }
 
-###################################################################################
-# Configure UFW Firewall                                                          #
-###################################################################################
+#############################################################################
+# Configure Firewall                                                        #
+#############################################################################
 
 configure_ufw() {
     print_header "Configuring Firewall"
     
-    # Skip if requested
-    if [[ "$BOOKSTACK_SKIP_UFW" == "true" ]]; then
-        log INFO "Skipping UFW configuration (BOOKSTACK_SKIP_UFW=true)"
+    # Skip if env var set
+    if [[ "${SKIP_FIREWALL:-false}" == "true" ]]; then
+        log INFO "Firewall configuration skipped (BOOKSTACK_SKIP_UFW=true)"
         echo
         return 0
     fi
@@ -933,6 +952,7 @@ configure_ufw() {
         log WARN "UFW not available or not functional"
         log INFO "Output: $ufw_status"
         log INFO "Configure firewall on the host instead"
+        log INFO "Required port: 80/tcp"
         echo
         return 0
     fi
@@ -952,47 +972,40 @@ configure_ufw() {
     if echo "$ufw_status" | grep -qE "80/tcp.*ALLOW"; then
         log SUCCESS "Port 80/tcp already allowed"
     else
-        if sudo ufw allow 80/tcp comment "BookStack HTTP" >> "$LOG_FILE" 2>&1; then
-            log SUCCESS "Allowed port 80/tcp (HTTP)"
+        if sudo ufw allow 80/tcp comment "BookStack HTTP" >/dev/null 2>&1; then
+            log SUCCESS "Allowed port 80/tcp (BookStack HTTP)"
         else
-            # Try without comment for older UFW versions
-            if sudo ufw allow 80/tcp >> "$LOG_FILE" 2>&1; then
-                log SUCCESS "Allowed port 80/tcp (HTTP)"
+            # Fallback: try without comment for older UFW versions
+            if sudo ufw allow 80/tcp >/dev/null 2>&1; then
+                log SUCCESS "Allowed port 80/tcp"
             else
                 log WARN "Failed to add UFW rule for port 80/tcp"
             fi
         fi
     fi
     
-    # Reload UFW
-    log STEP "Reloading firewall..."
-    if sudo ufw reload >> "$LOG_FILE" 2>&1; then
-        log SUCCESS "Firewall reloaded"
-    else
-        log WARN "UFW reload failed (rules may still be applied)"
-    fi
-    
     log SUCCESS "Firewall configuration complete"
     echo
 }
 
-###################################################################################
-# Show Summary                                                                    #
-###################################################################################
+#############################################################################
+# Installation Summary                                                      #
+#############################################################################
 
 show_summary() {
-    local ip=$(get_local_ip)
+    local ip_address
+    ip_address=$(get_local_ip)
     
     echo
     draw_box "Installation Complete"
     
     echo
     print_header "BookStack Access Information"
-    if [[ "$ip" == "$BOOKSTACK_DOMAIN" ]]; then
-        print_kv "URL" "http://${ip}/"
+    if [[ "$ip_address" == "$BOOKSTACK_DOMAIN" ]]; then
+        print_kv "URL" "http://${ip_address}/"
     else
         print_kv "URL" "http://${BOOKSTACK_DOMAIN}/"
-        print_kv "IP Access" "http://${ip}/"
+        print_kv "IP Access" "http://${ip_address}/"
     fi
     
     echo
@@ -1012,33 +1025,39 @@ show_summary() {
     print_kv "Application" "$BOOKSTACK_DIR"
     print_kv "Config File" "$BOOKSTACK_DIR/.env"
     print_kv "Apache Config" "/etc/apache2/sites-enabled/bookstack.conf"
-    print_kv "Install Log" "$LOG_FILE"
+    print_kv "Installation Log" "$LOG_FILE"
     
     echo
-    print_header "Useful Commands"
-    printf "  %b\n" "${C_DIM}# View status${C_RESET}"
-    printf "  %b\n" "${C_CYAN}./bookstack.sh --status${C_RESET}"
+    print_header "Management Commands"
+    printf "  %b\n" "${C_DIM}# Check status${C_RESET}"
+    printf "  %b\n" "${C_CYAN}./${SCRIPT_NAME}.sh --status${C_RESET}"
     echo
     printf "  %b\n" "${C_DIM}# View logs${C_RESET}"
-    printf "  %b\n" "${C_CYAN}./bookstack.sh --logs${C_RESET}"
+    printf "  %b\n" "${C_CYAN}./${SCRIPT_NAME}.sh --logs${C_RESET}"
+    echo
+    printf "  %b\n" "${C_DIM}# Reconfigure domain${C_RESET}"
+    printf "  %b\n" "${C_CYAN}./${SCRIPT_NAME}.sh --configure${C_RESET}"
     echo
     printf "  %b\n" "${C_DIM}# Restart services${C_RESET}"
     printf "  %b\n" "${C_CYAN}sudo systemctl restart apache2 php8.4-fpm${C_RESET}"
     echo
     printf "  %b\n" "${C_DIM}# Update BookStack${C_RESET}"
     printf "  %b\n" "${C_CYAN}cd $BOOKSTACK_DIR && sudo git pull && sudo php artisan migrate --force${C_RESET}"
+    echo
+    printf "  %b\n" "${C_DIM}# Uninstall${C_RESET}"
+    printf "  %b\n" "${C_CYAN}./${SCRIPT_NAME}.sh --uninstall${C_RESET}"
     
     echo
     draw_separator
     echo
 }
 
-###################################################################################
-# Prompt for Reboot                                                               #
-###################################################################################
+#############################################################################
+# Prompt for Reboot                                                         #
+#############################################################################
 
 prompt_reboot() {
-    if [[ "$SKIP_REBOOT" == "true" ]]; then
+    if [[ "$BOOKSTACK_SKIP_REBOOT" == "true" ]]; then
         return 0
     fi
     
@@ -1070,9 +1089,9 @@ prompt_reboot() {
     done
 }
 
-###################################################################################
-# Post-Install Commands                                                           #
-###################################################################################
+#############################################################################
+# Post-Install Commands                                                     #
+#############################################################################
 
 cmd_status() {
     print_header "BookStack Status"
@@ -1116,7 +1135,8 @@ cmd_status() {
     # Disk usage
     echo
     print_header "Disk Usage"
-    local disk_usage=$(du -sh "$BOOKSTACK_DIR" 2>/dev/null | cut -f1)
+    local disk_usage
+    disk_usage=$(du -sh "$BOOKSTACK_DIR" 2>/dev/null | cut -f1)
     print_kv "Application" "${disk_usage:-unknown}"
     
     echo
@@ -1144,6 +1164,82 @@ cmd_logs() {
     echo "${C_RESET}"
 }
 
+cmd_configure() {
+    # Verify sudo access
+    if ! sudo -v 2>/dev/null; then
+        die "This operation requires sudo privileges"
+    fi
+    
+    print_header "Reconfigure BookStack"
+    
+    if [[ ! -d "$BOOKSTACK_DIR" ]]; then
+        die "BookStack is not installed at $BOOKSTACK_DIR"
+    fi
+    
+    # Get current domain from .env
+    local current_domain=""
+    if [[ -f "$BOOKSTACK_DIR/.env" ]]; then
+        current_domain=$(grep -E "^APP_URL=" "$BOOKSTACK_DIR/.env" | sed 's|APP_URL=http://||')
+    fi
+    
+    print_warning "This will update the domain and restart services."
+    print_info "Current configuration:"
+    print_kv "Domain" "${current_domain:-unknown}"
+    
+    if ! is_silent; then
+        echo
+        while true; do
+            echo -n "${C_BOLD}${C_CYAN}Continue? ${C_RESET}${C_DIM}(yes/no)${C_RESET} "
+            read -r choice
+            choice=$(echo "$choice" | tr '[:upper:]' '[:lower:]')
+            
+            case "$choice" in
+                yes|y) break ;;
+                no|n)
+                    print_info "Reconfiguration cancelled"
+                    exit 0
+                    ;;
+                *) print_error "Invalid input. Please enter 'yes' or 'no'" ;;
+            esac
+        done
+    fi
+    
+    # Get new domain (reuse existing function logic)
+    if [[ -z "$BOOKSTACK_DOMAIN" ]]; then
+        local default_ip
+        default_ip=$(get_local_ip)
+        echo
+        printf "%b" "${C_CYAN}New domain/IP [${current_domain:-$default_ip}]: ${C_RESET}"
+        read -r BOOKSTACK_DOMAIN
+        BOOKSTACK_DOMAIN="${BOOKSTACK_DOMAIN:-${current_domain:-$default_ip}}"
+    fi
+    
+    # Update .env
+    print_step "Updating domain to: $BOOKSTACK_DOMAIN"
+    sudo sed -i "s@APP_URL=.*\$@APP_URL=http://${BOOKSTACK_DOMAIN}@" "$BOOKSTACK_DIR/.env"
+    
+    # Update Apache vhost
+    if [[ -f /etc/apache2/sites-available/bookstack.conf ]]; then
+        sudo sed -i "s@ServerName .*@ServerName ${BOOKSTACK_DOMAIN}@" /etc/apache2/sites-available/bookstack.conf
+    fi
+    
+    # Restart services
+    print_step "Restarting services..."
+    if sudo systemctl restart apache2 php8.4-fpm; then
+        sleep 2
+        if service_is_active apache2 && service_is_active php8.4-fpm; then
+            log SUCCESS "BookStack reconfigured and running"
+            print_kv "URL" "http://${BOOKSTACK_DOMAIN}/"
+        else
+            print_warning "Services may not be running correctly after restart"
+        fi
+    else
+        print_error "Failed to restart services"
+    fi
+    
+    echo
+}
+
 cmd_uninstall() {
     # Verify sudo access
     if ! sudo -v 2>/dev/null; then
@@ -1169,16 +1265,12 @@ cmd_uninstall() {
             choice=$(echo "$choice" | tr '[:upper:]' '[:lower:]')
             
             case "$choice" in
-                yes|y)
-                    break
-                    ;;
+                yes|y) break ;;
                 no|n)
                     print_info "Uninstall cancelled"
                     exit 0
                     ;;
-                *)
-                    print_error "Invalid input. Please enter 'yes' or 'no'"
-                    ;;
+                *) print_error "Invalid input. Please enter 'yes' or 'no'" ;;
             esac
         done
     fi
@@ -1213,13 +1305,19 @@ cmd_uninstall() {
         print_info "Database retained: $DB_NAME"
     fi
     
+    # Remove firewall rules (only if UFW active)
+    if sudo ufw status 2>/dev/null | grep -q "Status: active"; then
+        print_step "Removing firewall rules..."
+        sudo ufw delete allow 80/tcp 2>/dev/null || true
+    fi
+    
     log SUCCESS "BookStack has been removed"
     echo
 }
 
-###################################################################################
-# Show Already Installed Menu                                                     #
-###################################################################################
+#############################################################################
+# Show Already Installed Menu                                               #
+#############################################################################
 
 show_already_installed() {
     clear
@@ -1246,10 +1344,13 @@ show_already_installed() {
     echo
     print_header "Management Commands"
     printf "  %b\n" "${C_DIM}# View status${C_RESET}"
-    printf "  %b\n" "${C_CYAN}./bookstack.sh --status${C_RESET}"
+    printf "  %b\n" "${C_CYAN}./${SCRIPT_NAME}.sh --status${C_RESET}"
     echo
     printf "  %b\n" "${C_DIM}# View logs${C_RESET}"
-    printf "  %b\n" "${C_CYAN}./bookstack.sh --logs${C_RESET}"
+    printf "  %b\n" "${C_CYAN}./${SCRIPT_NAME}.sh --logs${C_RESET}"
+    echo
+    printf "  %b\n" "${C_DIM}# Reconfigure domain${C_RESET}"
+    printf "  %b\n" "${C_CYAN}./${SCRIPT_NAME}.sh --configure${C_RESET}"
     echo
     printf "  %b\n" "${C_DIM}# Restart services${C_RESET}"
     printf "  %b\n" "${C_CYAN}sudo systemctl restart apache2 php8.4-fpm${C_RESET}"
@@ -1259,47 +1360,32 @@ show_already_installed() {
     printf "  %b\n" "${C_CYAN}sudo php artisan migrate --force${C_RESET}"
     echo
     printf "  %b\n" "${C_DIM}# Uninstall${C_RESET}"
-    printf "  %b\n" "${C_CYAN}./bookstack.sh --uninstall${C_RESET}"
+    printf "  %b\n" "${C_CYAN}./${SCRIPT_NAME}.sh --uninstall${C_RESET}"
     
     echo
     print_info "To reinstall, first uninstall the existing installation:"
-    printf "  %b\n" "${C_CYAN}./bookstack.sh --uninstall${C_RESET}"
-    printf "  %b\n" "${C_CYAN}./bookstack.sh${C_RESET}"
+    printf "  %b\n" "${C_CYAN}./${SCRIPT_NAME}.sh --uninstall${C_RESET}"
+    printf "  %b\n" "${C_CYAN}./${SCRIPT_NAME}.sh${C_RESET}"
     echo
 }
 
-###################################################################################
-# Main Execution                                                                  #
-###################################################################################
+#############################################################################
+# Main Execution                                                            #
+#############################################################################
 
 main() {
-    # Handle post-install commands (these don't need the full pre-flight)
+    # Handle post-install commands
     case "${1:-}" in
-        --status)
-            cmd_status
-            exit 0
-            ;;
-        --logs)
-            cmd_logs "${2:-50}"
-            exit 0
-            ;;
-        --uninstall)
-            cmd_uninstall
-            exit 0
-            ;;
-        --version|-v)
-            echo "bookstack.sh v${SCRIPT_VERSION}"
-            exit 0
-            ;;
-        "")
-            # Continue with installation
-            ;;
-        *)
-            die "Unknown option: $1 (use --help for usage)"
-            ;;
+        --status)     cmd_status; exit 0 ;;
+        --logs)       cmd_logs "${2:-50}"; exit 0 ;;
+        --configure)  cmd_configure; exit 0 ;;
+        --uninstall)  cmd_uninstall; exit 0 ;;
+        --version|-v) echo "${SCRIPT_NAME}.sh v${SCRIPT_VERSION}"; exit 0 ;;
+        "")           ;;  # Continue with installation
+        *)            die "Unknown option: $1 (use --help for usage)" ;;
     esac
     
-    # Early check: Verify sudo is available before we do anything
+    # Early sudo check (before logging)
     if ! command -v sudo >/dev/null 2>&1; then
         echo "ERROR: sudo is not installed or not in PATH" >&2
         echo "This script requires sudo. Please install it first:" >&2
@@ -1307,7 +1393,6 @@ main() {
         exit 1
     fi
     
-    # Verify user has sudo access before creating log file
     if [[ ${EUID} -eq 0 ]]; then
         echo "ERROR: This script must NOT be run as root!" >&2
         echo "Run as a regular user with sudo privileges:" >&2
@@ -1365,5 +1450,4 @@ main() {
     log INFO "=== BookStack Installation Completed ==="
 }
 
-# Run main function
 main "$@"

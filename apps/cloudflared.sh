@@ -99,9 +99,6 @@ set -euo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
 
-# Secure file creation (tunnel tokens handled)
-umask 077
-
 # Track services we stop (to restart on cleanup)
 UNATTENDED_UPGRADES_WAS_ACTIVE=false
 

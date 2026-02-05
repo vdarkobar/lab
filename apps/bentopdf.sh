@@ -944,61 +944,50 @@ configure_firewall() {
     
     # Skip firewall config if binding to localhost only
     if [[ "$BENTOPDF_BIND" == "127.0.0.1" ]]; then
-        print_info "Binding to localhost only - no firewall changes needed"
+        log INFO "Binding to localhost only - no firewall changes needed"
         echo
-        return
+        return 0
     fi
     
-    # Check if UFW is installed
-    if ! command -v ufw >/dev/null 2>&1; then
-        print_warning "UFW not installed - skipping firewall configuration"
-        print_info "Install UFW: sudo apt install ufw"
-        echo
-        return
-    fi
-    
-    # Test if UFW is functional
-    if ! sudo ufw status >/dev/null 2>&1; then
-        print_warning "UFW not functional (possibly running in unprivileged container)"
-        print_info "Configure firewall on the Proxmox host instead"
-        print_info "Required port: ${BENTOPDF_PORT}/tcp"
-        echo
-        return
-    fi
-    
-    # Fix #5: More robust UFW status check
+    # Test if UFW is available and functional
     local ufw_status
-    ufw_status=$(sudo ufw status 2>/dev/null)
-    
-    # Check if active (case-insensitive, handles different locales)
-    if ! echo "$ufw_status" | head -n1 | grep -qi "active"; then
-        print_warning "UFW is installed but not active"
-        print_info "Enable with: sudo ufw enable"
-        print_info "Then add rule for port ${BENTOPDF_PORT}"
+    if ! ufw_status=$(sudo ufw status 2>&1); then
+        log WARN "UFW not available or not functional"
+        log INFO "Output: $ufw_status"
+        log INFO "Configure firewall on the host instead"
+        log INFO "Required port: ${BENTOPDF_PORT}/tcp"
         echo
-        return
+        return 0
     fi
     
-    print_success "UFW is active"
+    # Check if UFW is active
+    if ! echo "$ufw_status" | grep -q "Status: active"; then
+        log INFO "UFW is not active - skipping firewall configuration"
+        log INFO "To enable UFW manually: sudo ufw enable"
+        echo
+        return 0
+    fi
     
-    # Check if rule already exists
+    log SUCCESS "UFW is active"
+    print_step "Adding firewall rules..."
+    
+    # Allow BentoPDF port
     if echo "$ufw_status" | grep -qE "${BENTOPDF_PORT}/tcp.*ALLOW"; then
-        print_success "Port ${BENTOPDF_PORT}/tcp already allowed"
+        log SUCCESS "Port ${BENTOPDF_PORT}/tcp already allowed"
     else
-        print_step "Adding firewall rule..."
-        if sudo ufw allow "${BENTOPDF_PORT}/tcp" comment "BentoPDF Web UI" >/dev/null 2>&1; then
-            print_success "Allowed port ${BENTOPDF_PORT}/tcp (BentoPDF Web UI)"
+        if sudo ufw allow "${BENTOPDF_PORT}/tcp" comment "BentoPDF Web UI" >> "$LOG_FILE" 2>&1; then
+            log SUCCESS "Allowed port ${BENTOPDF_PORT}/tcp (BentoPDF Web UI)"
         else
-            # Fallback without comment (older UFW)
-            if sudo ufw allow "${BENTOPDF_PORT}/tcp" >/dev/null 2>&1; then
-                print_success "Allowed port ${BENTOPDF_PORT}/tcp"
+            # Try without comment for older UFW versions
+            if sudo ufw allow "${BENTOPDF_PORT}/tcp" >> "$LOG_FILE" 2>&1; then
+                log SUCCESS "Allowed port ${BENTOPDF_PORT}/tcp"
             else
-                print_warning "Failed to add firewall rule"
+                log WARN "Failed to add UFW rule for port ${BENTOPDF_PORT}/tcp"
             fi
         fi
     fi
     
-    log SUCCESS "Firewall configured"
+    log SUCCESS "Firewall configuration complete"
     echo
 }
 

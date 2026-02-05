@@ -15,51 +15,81 @@
 #   - Debian 13 (or compatible)                                             #
 #   - Run as non-root user with sudo privileges                             #
 #   - Internet connection for package installation                          #
-#                                                                           #
-# ENVIRONMENT VARIABLES (for non-interactive mode):                         #
-#   UNBOUND_DOMAIN         - Local domain name (default: from resolv.conf)  #
-#   UNBOUND_SKIP_REBOOT    - Set to "true" to skip reboot prompt            #
-#   UNBOUND_UPSTREAM       - Upstream DNS: "quad9", "cloudflare", "both"    #
 #############################################################################
 
-set -Eeuo pipefail
+readonly SCRIPT_VERSION="2.0.0"
+readonly SCRIPT_NAME="unbound"
 
-#################################################################
-# Resolve Script Directory and Load Formatting Library          #
-#################################################################
+#############################################################################
+# Handle --help early (before any function definitions)                     #
+#############################################################################
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." 2>/dev/null && pwd)" || REPO_ROOT="$SCRIPT_DIR"
+case "${1:-}" in
+    --help|-h)
+        echo "Unbound DNS Resolver Installer v${SCRIPT_VERSION}"
+        echo
+        echo "Usage: $0 [--help] [--status] [--logs [N]] [--configure] [--uninstall]"
+        echo
+        echo "Requirements:"
+        echo "  - Must run as NON-ROOT user with sudo privileges"
+        echo "  - Debian 13 (Trixie) or Debian 12 (Bookworm)"
+        echo "  - Internet connection for package installation"
+        echo
+        echo "Installation:"
+        echo "  bootstrap.sh → hardening.sh → Select \"Unbound DNS\""
+        echo
+        echo "Environment variables (for non-interactive mode):"
+        echo "  UNBOUND_SILENT=true       Non-interactive mode (safe defaults)"
+        echo "  UNBOUND_SKIP_UFW=true     Skip firewall configuration"
+        echo "  UNBOUND_DOMAIN=home.local Local domain name (default: from resolv.conf)"
+        echo "  UNBOUND_SKIP_REBOOT=true  Skip reboot prompt"
+        echo
+        echo "Post-install commands:"
+        echo "  --status      Show service status and access info"
+        echo "  --logs [N]    Show last N lines of logs (default: 50)"
+        echo "  --configure   Run configuration menu (VLANs, static hosts)"
+        echo "  --vlans       Configure VLAN access control only"
+        echo "  --hosts       Configure static DNS hosts only"
+        echo "  --uninstall   Remove Unbound"
+        echo "  --version     Show version"
+        echo
+        echo "Network requirements:"
+        echo "  Inbound 53/tcp, 53/udp    DNS queries from allowed clients"
+        echo "  Outbound 853/tcp          DNS-over-TLS to upstream resolvers"
+        echo
+        echo "Files created:"
+        echo "  /etc/unbound/unbound.conf                       Main configuration"
+        echo "  /etc/unbound/unbound.conf.d/vlans.conf          VLAN access control"
+        echo "  /etc/unbound/unbound.conf.d/30-static-hosts.conf  Static DNS records"
+        echo "  /var/log/lab/unbound-*.log                      Installation logs"
+        exit 0
+        ;;
+esac
 
-# Try multiple locations for formatting library
-if [[ -f "$REPO_ROOT/lib/formatting.sh" ]]; then
-    source "$REPO_ROOT/lib/formatting.sh"
-elif [[ -f "$SCRIPT_DIR/../lib/formatting.sh" ]]; then
-    source "$SCRIPT_DIR/../lib/formatting.sh"
-elif [[ -f "$HOME/lab/lib/formatting.sh" ]]; then
-    source "$HOME/lab/lib/formatting.sh"
-else
-    # Minimal fallback formatting
-    C_GREEN='\033[0;32m'
-    C_RED='\033[0;31m'
-    C_YELLOW='\033[0;33m'
-    C_CYAN='\033[0;36m'
-    C_RESET='\033[0m'
-    print_header() { echo -e "\n${C_CYAN}━━━ $1 ━━━${C_RESET}"; }
-    print_success() { echo -e "${C_GREEN}✓${C_RESET} $1"; }
-    print_error() { echo -e "${C_RED}✗${C_RESET} $1" >&2; }
-    print_warning() { echo -e "${C_YELLOW}⚠${C_RESET} $1"; }
-    print_info() { echo -e "${C_CYAN}ℹ${C_RESET} $1"; }
-    draw_separator() { echo -e "${C_CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"; }
-fi
+set -euo pipefail
+export DEBIAN_FRONTEND=noninteractive
 
-#################################################################
-# Configuration                                                 #
-#################################################################
+#############################################################################
+# Track services we stop (to restart on cleanup)                            #
+#############################################################################
+
+UNATTENDED_UPGRADES_WAS_ACTIVE=false
+
+#############################################################################
+# App Configuration (environment variable overrides)                        #
+#############################################################################
+
+UNBOUND_SILENT="${UNBOUND_SILENT:-false}"; SILENT="$UNBOUND_SILENT"
+UNBOUND_SKIP_UFW="${UNBOUND_SKIP_UFW:-false}"; SKIP_FIREWALL="$UNBOUND_SKIP_UFW"
+UNBOUND_DOMAIN="${UNBOUND_DOMAIN:-}"
+UNBOUND_SKIP_REBOOT="${UNBOUND_SKIP_REBOOT:-false}"
+
+#############################################################################
+# Logging Configuration                                                     #
+#############################################################################
 
 readonly LOG_DIR="/var/log/lab"
-readonly LOG_FILE="$LOG_DIR/unbound.log"
-readonly VERSION="1.0.0"
+readonly LOG_FILE="${LOG_DIR}/${SCRIPT_NAME}-$(date +%Y%m%d-%H%M%S).log"
 
 # Working directory (cleaned up on exit)
 WORK_DIR=""
@@ -67,26 +97,189 @@ WORK_DIR=""
 # Domain name (detected or provided via env)
 DOMAIN_NAME=""
 
-#################################################################
-# Logging Functions                                             #
-#################################################################
+#############################################################################
+# Terminal Formatting (embedded - no external dependency)                   #
+#############################################################################
 
-setup_logging() {
-    sudo mkdir -p "$LOG_DIR"
-    sudo touch "$LOG_FILE"
-    sudo chmod 644 "$LOG_FILE"
-    echo "========================================" | sudo tee -a "$LOG_FILE" >/dev/null
-    echo "unbound.sh started at $(date)" | sudo tee -a "$LOG_FILE" >/dev/null
-    echo "========================================" | sudo tee -a "$LOG_FILE" >/dev/null
+# Check if terminal supports colors
+if [[ -t 1 ]] && command -v tput >/dev/null 2>&1 && tput setaf 1 >/dev/null 2>&1; then
+    COLORS_SUPPORTED=true
+    
+    readonly C_RESET=$(tput sgr0)
+    readonly C_BOLD=$(tput bold)
+    readonly C_DIM=$(tput dim)
+    
+    readonly C_RED=$(tput setaf 1)
+    readonly C_GREEN=$(tput setaf 2)
+    readonly C_YELLOW=$(tput setaf 3)
+    readonly C_BLUE=$(tput setaf 4)
+    readonly C_CYAN=$(tput setaf 6)
+    readonly C_WHITE=$(tput setaf 7)
+    
+    readonly C_BRIGHT_GREEN=$(tput setaf 10 2>/dev/null || tput setaf 2)
+    readonly C_BRIGHT_RED=$(tput setaf 9 2>/dev/null || tput setaf 1)
+    readonly C_BRIGHT_YELLOW=$(tput setaf 11 2>/dev/null || tput setaf 3)
+    readonly C_BRIGHT_BLUE=$(tput setaf 12 2>/dev/null || tput setaf 4)
+else
+    COLORS_SUPPORTED=false
+    readonly C_RESET=""
+    readonly C_BOLD=""
+    readonly C_DIM=""
+    readonly C_RED=""
+    readonly C_GREEN=""
+    readonly C_YELLOW=""
+    readonly C_BLUE=""
+    readonly C_CYAN=""
+    readonly C_WHITE=""
+    readonly C_BRIGHT_GREEN=""
+    readonly C_BRIGHT_RED=""
+    readonly C_BRIGHT_YELLOW=""
+    readonly C_BRIGHT_BLUE=""
+fi
+
+# Unicode symbols (with ASCII fallbacks)
+if [[ "${LANG:-}" =~ UTF-8 ]] || [[ "${LC_ALL:-}" =~ UTF-8 ]]; then
+    readonly SYMBOL_SUCCESS="✓"
+    readonly SYMBOL_ERROR="✗"
+    readonly SYMBOL_WARNING="⚠"
+    readonly SYMBOL_INFO="ℹ"
+    readonly SYMBOL_ARROW="→"
+    readonly SYMBOL_BULLET="•"
+else
+    readonly SYMBOL_SUCCESS="+"
+    readonly SYMBOL_ERROR="x"
+    readonly SYMBOL_WARNING="!"
+    readonly SYMBOL_INFO="i"
+    readonly SYMBOL_ARROW=">"
+    readonly SYMBOL_BULLET="*"
+fi
+
+#############################################################################
+# Output Functions                                                          #
+#############################################################################
+
+print_success() {
+    local msg="$*"
+    echo "${C_BRIGHT_GREEN}${C_BOLD}${SYMBOL_SUCCESS}${C_RESET} ${C_GREEN}${msg}${C_RESET}"
 }
+
+print_error() {
+    local msg="$*"
+    echo "${C_BRIGHT_RED}${C_BOLD}${SYMBOL_ERROR}${C_RESET} ${C_RED}${msg}${C_RESET}" >&2
+}
+
+print_warning() {
+    local msg="$*"
+    echo "${C_BRIGHT_YELLOW}${C_BOLD}${SYMBOL_WARNING}${C_RESET} ${C_YELLOW}${msg}${C_RESET}"
+}
+
+print_info() {
+    local msg="$*"
+    echo "${C_BRIGHT_BLUE}${C_BOLD}${SYMBOL_INFO}${C_RESET} ${C_BLUE}${msg}${C_RESET}"
+}
+
+print_step() {
+    local msg="$*"
+    echo "${C_CYAN}${C_BOLD}${SYMBOL_ARROW}${C_RESET} ${C_CYAN}${msg}${C_RESET}"
+}
+
+print_header() {
+    local msg="$*"
+    echo
+    echo "${C_BOLD}${C_CYAN}━━━ ${msg} ━━━${C_RESET}"
+}
+
+print_subheader() {
+    local msg="$*"
+    echo "${C_DIM}${SYMBOL_BULLET} ${msg}${C_RESET}"
+}
+
+print_kv() {
+    local key="$1"
+    local value="$2"
+    printf "${C_CYAN}%-20s${C_RESET} ${C_WHITE}%s${C_RESET}\n" "$key:" "$value"
+}
+
+#############################################################################
+# Visual Elements                                                           #
+#############################################################################
+
+draw_box() {
+    local text="$1"
+    local width=68
+    local padding=$(( (width - ${#text} - 2) / 2 ))
+    
+    echo "${C_CYAN}"
+    echo "╔$(printf '═%.0s' $(seq 1 $width))╗"
+    printf "║%*s%s%*s║\n" $padding "" "$text" $padding ""
+    echo "╚$(printf '═%.0s' $(seq 1 $width))╝"
+    echo "${C_RESET}"
+}
+
+draw_separator() {
+    echo "${C_DIM}$(printf '─%.0s' $(seq 1 70))${C_RESET}"
+}
+
+#############################################################################
+# Logging                                                                   #
+#############################################################################
 
 log() {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | sudo tee -a "$LOG_FILE" >/dev/null
+    local level="$1"; shift
+    local message="$*"
+    local timestamp
+    timestamp=$(date +"%Y-%m-%d %H:%M:%S")
+
+    # Write plain text to log file (strip ANSI color codes)
+    if [[ -n "${LOG_FILE:-}" ]] && [[ -w "${LOG_FILE:-}" || -w "$(dirname "${LOG_FILE:-/tmp}")" ]]; then
+        echo "[$timestamp] [$level] $message" | sed 's/\x1b\[[0-9;]*m//g' >> "$LOG_FILE" 2>/dev/null || true
+    fi
+
+    # Display to console with formatting
+    case "$level" in
+        SUCCESS) print_success "$message" ;;
+        ERROR)   print_error "$message" ;;
+        WARN)    print_warning "$message" ;;
+        INFO)    print_info "$message" ;;
+        STEP)    print_step "$message" ;;
+        *)       echo "$message" ;;
+    esac
 }
 
-#################################################################
-# Cleanup and Error Handling                                    #
-#################################################################
+die() {
+    local msg="$*"
+    log ERROR "$msg"
+    exit 1
+}
+
+setup_logging() {
+    # Note: sudo existence check should be done BEFORE calling this function
+    
+    # Create log directory with sudo
+    if [[ ! -d "$LOG_DIR" ]]; then
+        sudo mkdir -p "$LOG_DIR" 2>/dev/null || true
+    fi
+
+    # Create log file and set ownership to current user
+    sudo touch "$LOG_FILE" 2>/dev/null || true
+    sudo chown "$(whoami):$(id -gn)" "$LOG_FILE" 2>/dev/null || true
+    sudo chmod 644 "$LOG_FILE" 2>/dev/null || true
+
+    log INFO "=== ${SCRIPT_NAME} Started ==="
+    log INFO "Version: $SCRIPT_VERSION"
+    log INFO "User: $(whoami)"
+    log INFO "Date: $(date)"
+}
+
+#############################################################################
+# Error trap for better debugging (set after print_error is defined)        #
+#############################################################################
+
+trap 'print_error "Error at line $LINENO: $BASH_COMMAND"; log ERROR "Error at line $LINENO: $BASH_COMMAND"' ERR
+
+#############################################################################
+# Cleanup / Restore Services                                                #
+#############################################################################
 
 cleanup() {
     local exit_code=$?
@@ -96,77 +289,186 @@ cleanup() {
         rm -rf "$WORK_DIR"
     fi
     
-    if [[ $exit_code -ne 0 ]]; then
-        echo
-        print_error "Script failed with exit code: $exit_code"
-        print_warning "Check log file: $LOG_FILE"
+    # Restart unattended-upgrades if we stopped it
+    if [[ "$UNATTENDED_UPGRADES_WAS_ACTIVE" == true ]]; then
+        if sudo systemctl start unattended-upgrades 2>/dev/null; then
+            print_info "Restarted unattended-upgrades service"
+        fi
     fi
     
-    log "Script exited with code: $exit_code"
+    if [[ $exit_code -ne 0 ]]; then
+        log ERROR "Installation failed - check log: $LOG_FILE"
+    fi
+    
+    exit $exit_code
 }
 
-trap cleanup EXIT
+trap cleanup EXIT INT TERM
 
-die() {
-    print_error "$1"
-    log "FATAL: $1"
-    exit 1
+#############################################################################
+# Helper Functions                                                          #
+#############################################################################
+
+is_silent() {
+    [[ "${SILENT:-false}" == "true" ]]
 }
 
-#################################################################
-# Preflight Checks                                              #
-#################################################################
+command_exists() {
+    command -v "$1" &>/dev/null
+}
+
+service_is_active() {
+    systemctl is-active --quiet "$1" 2>/dev/null
+}
+
+service_is_enabled() {
+    systemctl is-enabled --quiet "$1" 2>/dev/null
+}
+
+# Uses ip route first, hostname -I as fallback
+get_local_ip() {
+    local ip_address
+    ip_address=$(ip route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}')
+    [[ -z "$ip_address" ]] && ip_address=$(hostname -I 2>/dev/null | awk '{print $1}')
+    ip_address=${ip_address:-"localhost"}
+    echo "$ip_address"
+}
+
+#############################################################################
+# Pre-flight Checks                                                         #
+#############################################################################
 
 preflight_checks() {
-    print_header "Preflight Checks"
-    
+    print_header "Pre-flight Checks"
+
+    # CRITICAL: Enforce non-root execution
+    if [[ ${EUID} -eq 0 ]]; then
+        echo
+        print_error "This script must NOT be run as root!"
+        echo
+        print_info "Correct usage:"
+        echo "  ${C_CYAN}./$(basename "$0")${C_RESET}"
+        echo
+        print_info "The script will use sudo internally when needed."
+        echo
+        die "Execution blocked: Running as root user"
+    fi
+    print_success "Running as non-root user: ${C_BOLD}$(whoami)${C_RESET}"
+
+    # sudo must exist on minimal images
+    if ! command -v sudo >/dev/null 2>&1; then
+        echo
+        print_error "sudo is not installed. This script requires sudo."
+        echo
+        print_info "Fix (run as root):"
+        echo "  apt-get update && apt-get install -y sudo"
+        echo "  usermod -aG sudo $(whoami)"
+        echo "  # then logout/login"
+        echo
+        die "Execution blocked: sudo not installed"
+    fi
+
+    # Verify sudo access (may prompt)
+    if ! sudo -v 2>/dev/null; then
+        echo
+        print_error "User $(whoami) does not have sudo privileges"
+        echo
+        print_info "To grant sudo access (run as root):"
+        echo "  ${C_CYAN}usermod -aG sudo $(whoami)${C_RESET}"
+        echo "  ${C_CYAN}# then logout/login${C_RESET}"
+        echo
+        die "Execution blocked: No sudo privileges"
+    fi
+    print_success "Sudo privileges confirmed"
+
     # Check if running on PVE host (should not be)
-    if [[ -f /etc/pve/.version ]] || command -v pveversion &>/dev/null; then
-        die "This script should not run on Proxmox VE host. Run inside a VM or LXC container."
+    if [[ -f /etc/pve/.version ]] || command_exists pveversion; then
+        die "This script must not run on the Proxmox VE host. Run inside a VM or LXC container."
     fi
-    print_success "Not running on PVE host"
-    
-    # Check for sudo/root access
-    if [[ $EUID -ne 0 ]]; then
-        if ! command -v sudo &>/dev/null; then
-            die "sudo is required but not installed"
+    print_success "Not running on Proxmox host"
+
+    # Check for systemd (required)
+    if ! command_exists systemctl; then
+        die "systemd not found (is this container systemd-enabled?)"
+    fi
+    print_success "systemd available"
+
+    # Check OS (warn if not Debian)
+    if [[ -f /etc/os-release ]]; then
+        . /etc/os-release
+        if [[ "${ID:-}" != "debian" ]]; then
+            print_warning "Designed for Debian. Detected: ${ID:-unknown}"
+        else
+            print_success "Debian detected: ${VERSION:-unknown}"
         fi
-        if ! sudo -v &>/dev/null; then
-            die "User does not have sudo privileges"
-        fi
-        print_success "Running as non-root user: $(whoami)"
-        print_success "sudo access verified"
     else
-        print_success "Running as root"
+        print_warning "Cannot determine OS version (/etc/os-release missing)"
     fi
-    
-    # Check for required commands
-    local required_cmds=("apt" "systemctl" "wget")
-    for cmd in "${required_cmds[@]}"; do
-        if ! command -v "$cmd" &>/dev/null; then
-            die "Required command not found: $cmd"
+
+    # Check internet connectivity (multiple methods for minimal systems)
+    print_step "Testing internet connectivity..."
+    local internet_ok=false
+
+    if command_exists curl; then
+        if curl -s --max-time 5 --head https://deb.debian.org >/dev/null 2>&1; then
+            print_success "Internet connectivity verified (curl)"
+            internet_ok=true
         fi
-    done
-    print_success "Required commands available"
-    
-    # Check if Debian-based
-    if [[ ! -f /etc/debian_version ]]; then
-        die "This script requires a Debian-based system"
     fi
-    print_success "Debian-based system detected"
-    
-    # Check internet connectivity
-    if ! wget -q --spider http://deb.debian.org; then
-        die "No internet connection available"
+
+    if [[ "$internet_ok" == false ]] && command_exists wget; then
+        if wget -q --timeout=5 --spider https://deb.debian.org 2>/dev/null; then
+            print_success "Internet connectivity verified (wget)"
+            internet_ok=true
+        fi
     fi
-    print_success "Internet connectivity verified"
-    
-    log "Preflight checks passed"
+
+    if [[ "$internet_ok" == false ]]; then
+        # Bash built-in TCP check (no external tools)
+        if timeout 5 bash -c 'cat < /dev/null > /dev/tcp/deb.debian.org/80' 2>/dev/null; then
+            print_success "Internet connectivity verified (dev/tcp)"
+            internet_ok=true
+        fi
+    fi
+
+    if [[ "$internet_ok" == false ]]; then
+        print_warning "Could not verify internet with available tools"
+        print_info "Will verify connectivity during package installation..."
+    fi
+
+    echo
 }
 
-#################################################################
-# Domain Name Detection                                         #
-#################################################################
+#############################################################################
+# APT Lock Handling                                                         #
+#############################################################################
+
+prepare_apt() {
+    # Stop unattended-upgrades to avoid apt locks (best-effort)
+    if systemctl is-active --quiet unattended-upgrades 2>/dev/null; then
+        UNATTENDED_UPGRADES_WAS_ACTIVE=true
+        sudo systemctl stop unattended-upgrades 2>/dev/null || true
+        print_info "Temporarily stopped unattended-upgrades"
+    fi
+
+    # Wait for dpkg lock (best-effort)
+    local wait_count=0
+    while sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
+        if [[ $wait_count -eq 0 ]]; then
+            print_subheader "Waiting for apt/dpkg lock..."
+        fi
+        wait_count=$((wait_count + 1))
+        sleep 2
+        if [[ $wait_count -ge 60 ]]; then
+            print_warning "Still waiting for apt lock (60s+) — continuing anyway"
+            break
+        fi
+    done
+}
+
+#############################################################################
+# Domain Name Detection                                                     #
+#############################################################################
 
 detect_domain_name() {
     print_header "Domain Name Detection"
@@ -174,68 +476,77 @@ detect_domain_name() {
     # Check if provided via environment
     if [[ -n "${UNBOUND_DOMAIN:-}" ]]; then
         DOMAIN_NAME="$UNBOUND_DOMAIN"
-        print_success "Using provided domain: $DOMAIN_NAME"
+        log SUCCESS "Using provided domain: $DOMAIN_NAME"
         return 0
     fi
     
     # Try to extract from /etc/resolv.conf
-    print_info "Detecting domain name from /etc/resolv.conf..."
+    print_step "Detecting domain name from /etc/resolv.conf..."
     
     # Method 1: domain line with awk
     DOMAIN_NAME=$(awk -F' ' '/^domain/ {print $2; exit}' /etc/resolv.conf 2>/dev/null || true)
     if [[ -n "$DOMAIN_NAME" ]]; then
-        print_success "Domain found (domain line): $DOMAIN_NAME"
+        log SUCCESS "Domain found (domain line): $DOMAIN_NAME"
         return 0
     fi
     
     # Method 2: search line with awk
     DOMAIN_NAME=$(awk -F' ' '/^search/ {print $2; exit}' /etc/resolv.conf 2>/dev/null || true)
     if [[ -n "$DOMAIN_NAME" ]]; then
-        print_success "Domain found (search line): $DOMAIN_NAME"
+        log SUCCESS "Domain found (search line): $DOMAIN_NAME"
         return 0
     fi
     
-    # Interactive fallback
+    # Interactive fallback (or default in silent mode)
+    if is_silent; then
+        DOMAIN_NAME="local"
+        log INFO "Using default domain (silent mode): $DOMAIN_NAME"
+        return 0
+    fi
+    
     print_warning "Could not auto-detect domain name"
-    echo -ne "Enter your local domain name (e.g., home.local): "
+    echo -ne "${C_CYAN}Enter your local domain name (e.g., home.local): ${C_RESET}"
     read -r DOMAIN_NAME
     
     if [[ -z "$DOMAIN_NAME" ]]; then
         die "Domain name is required"
     fi
     
-    print_success "Using domain: $DOMAIN_NAME"
+    log SUCCESS "Using domain: $DOMAIN_NAME"
 }
 
-#################################################################
-# Install Unbound                                               #
-#################################################################
+#############################################################################
+# Install Unbound                                                           #
+#############################################################################
 
 install_unbound() {
     print_header "Installing Unbound"
     
     # Check if already installed
     if dpkg -l | grep -q "^ii.*unbound "; then
-        print_warning "Unbound is already installed"
-        print_info "Proceeding with configuration update..."
+        log WARN "Unbound is already installed"
+        log INFO "Proceeding with configuration update..."
     else
-        print_info "Installing unbound package..."
+        prepare_apt
+        
+        log STEP "Updating package lists..."
         if ! sudo apt-get update -y; then
             die "Failed to update package lists"
         fi
         
+        log STEP "Installing unbound package..."
         if ! sudo apt-get install -y unbound; then
             die "Failed to install unbound"
         fi
-        print_success "Unbound installed successfully"
+        log SUCCESS "Unbound installed successfully"
     fi
     
-    log "Unbound installation completed"
+    log INFO "Unbound installation completed"
 }
 
-#################################################################
-# Create Configuration File                                     #
-#################################################################
+#############################################################################
+# Create Configuration File                                                 #
+#############################################################################
 
 create_config() {
     print_header "Creating Unbound Configuration"
@@ -246,7 +557,7 @@ create_config() {
     
     local config_file="$WORK_DIR/unbound.conf"
     
-    print_info "Generating unbound.conf..."
+    log STEP "Generating unbound.conf..."
     
     cat > "$config_file" <<'UNBOUND_CONFIG'
 # Unbound configuration file for Debian.
@@ -506,66 +817,73 @@ UNBOUND_CONFIG
     # Replace domain placeholder
     sed -i "s/DOMAIN_NAME_PLACEHOLDER/$DOMAIN_NAME/g" "$config_file"
     
-    print_success "Configuration generated with domain: $DOMAIN_NAME"
-    log "Configuration created with domain: $DOMAIN_NAME"
+    log SUCCESS "Configuration generated with domain: $DOMAIN_NAME"
 }
 
-#################################################################
-# Update Root Hints                                             #
-#################################################################
+#############################################################################
+# Update Root Hints                                                         #
+#############################################################################
 
 update_root_hints() {
     print_header "Updating Root Hints"
     
-    print_info "Downloading latest root hints from internic.net..."
+    log STEP "Downloading latest root hints from internic.net..."
     
     if wget https://www.internic.net/domain/named.root -qO- | sudo tee /usr/share/dns/root.hints >/dev/null; then
-        print_success "Root hints updated successfully"
+        log SUCCESS "Root hints updated successfully"
     else
-        print_warning "Failed to update root hints (will use existing)"
+        log WARN "Failed to update root hints (will use existing)"
     fi
-    
-    log "Root hints update attempted"
 }
 
-#################################################################
-# Install Configuration                                         #
-#################################################################
+#############################################################################
+# Install Configuration                                                     #
+#############################################################################
 
 install_config() {
     print_header "Installing Configuration"
     
     local config_file="$WORK_DIR/unbound.conf"
+    local target_conf="/etc/unbound/unbound.conf"
+    local config_changed=false
     
-    # Backup existing config if present
-    if [[ -f /etc/unbound/unbound.conf ]]; then
-        local backup="/etc/unbound/unbound.conf.backup.$(date +%Y%m%d%H%M%S)"
-        print_info "Backing up existing config to: $backup"
-        sudo cp /etc/unbound/unbound.conf "$backup"
+    # Check if config changed
+    if [[ -f "$target_conf" ]]; then
+        if ! cmp -s "$config_file" "$target_conf"; then
+            config_changed=true
+            local backup="${target_conf}.backup.$(date +%Y%m%d_%H%M%S)"
+            log INFO "Config changed - backing up to: $backup"
+            sudo cp "$target_conf" "$backup"
+        else
+            log INFO "Configuration unchanged"
+        fi
+    else
+        config_changed=true
+        log INFO "Creating new configuration"
     fi
     
-    # Install new config
-    print_info "Installing new configuration..."
-    if sudo cp "$config_file" /etc/unbound/unbound.conf; then
-        print_success "Configuration installed to /etc/unbound/unbound.conf"
-    else
-        die "Failed to install configuration"
+    if [[ "$config_changed" == "true" ]]; then
+        log STEP "Installing new configuration..."
+        if sudo cp "$config_file" "$target_conf"; then
+            sudo chmod 644 "$target_conf"
+            log SUCCESS "Configuration installed to $target_conf"
+        else
+            die "Failed to install configuration"
+        fi
     fi
     
     # Validate configuration
-    print_info "Validating configuration..."
-    if sudo unbound-checkconf /etc/unbound/unbound.conf; then
-        print_success "Configuration validation passed"
+    log STEP "Validating configuration..."
+    if sudo unbound-checkconf "$target_conf" >/dev/null 2>&1; then
+        log SUCCESS "Configuration validation passed"
     else
-        print_warning "Configuration validation had warnings (may still work)"
+        log WARN "Configuration validation had warnings (may still work)"
     fi
-    
-    log "Configuration installed"
 }
 
-#################################################################
-# Setup Cron Job for Root Hints                                 #
-#################################################################
+#############################################################################
+# Setup Cron Job for Root Hints                                             #
+#############################################################################
 
 setup_cron() {
     print_header "Setting Up Automatic Root Hints Updates"
@@ -576,12 +894,12 @@ setup_cron() {
     
     # Check if already exists
     if crontab -l 2>/dev/null | grep -q "root.hints.*unbound"; then
-        print_warning "Cron entry for root hints already exists"
+        log WARN "Cron entry for root hints already exists"
         return 0
     fi
     
     # Add cron entry
-    print_info "Adding quarterly root hints update to crontab..."
+    log STEP "Adding quarterly root hints update to crontab..."
     
     local temp_file
     temp_file=$(mktemp)
@@ -595,126 +913,178 @@ setup_cron() {
     echo "$cron_entry" >> "$temp_file"
     
     if crontab "$temp_file"; then
-        print_success "Cron job added (runs quarterly on 1st of month)"
+        log SUCCESS "Cron job added (runs quarterly on 1st of month)"
     else
-        print_warning "Failed to add cron job (manual updates required)"
+        log WARN "Failed to add cron job (manual updates required)"
     fi
     
     rm -f "$temp_file"
-    log "Cron setup completed"
 }
 
-#################################################################
-# Configure Firewall                                            #
-#################################################################
+#############################################################################
+# Configure Firewall                                                        #
+#############################################################################
 
 configure_firewall() {
     print_header "Configuring Firewall"
     
-    # Check if UFW is installed
-    if ! command -v ufw &>/dev/null; then
-        print_warning "UFW not installed - skipping firewall configuration"
+    # Check if skip firewall is set
+    if [[ "${SKIP_FIREWALL:-false}" == "true" ]]; then
+        log INFO "Firewall configuration skipped (UNBOUND_SKIP_UFW=true)"
+        echo
         return 0
     fi
     
-    # Test if UFW is functional (may fail in unprivileged containers)
-    if ! sudo ufw status >/dev/null 2>&1; then
-        print_warning "UFW not functional (missing capabilities?)"
-        print_info "Configure firewall on the host instead"
-        print_info "Required ports: 53/tcp, 53/udp (DNS)"
+    # Test if UFW is available and functional
+    local ufw_status
+    if ! ufw_status=$(sudo ufw status 2>&1); then
+        log WARN "UFW not available or not functional"
+        log INFO "Output: $ufw_status"
+        log INFO "Configure firewall on the host instead"
+        log INFO "Required ports: 53/tcp, 53/udp (DNS)"
+        echo
         return 0
     fi
     
     # Check if UFW is active
-    if ! sudo ufw status | grep -q "Status: active"; then
-        print_info "UFW not active - skipping firewall configuration"
+    if ! echo "$ufw_status" | grep -q "Status: active"; then
+        log INFO "UFW is not active - skipping firewall configuration"
+        log INFO "To enable UFW manually: sudo ufw enable"
+        echo
         return 0
     fi
     
-    local rules=(
-        "53/tcp:Unbound-DNS-TCP"
-        "53/udp:Unbound-DNS-UDP"
-    )
+    log SUCCESS "UFW is active"
+    print_step "Adding firewall rules..."
     
-    for rule in "${rules[@]}"; do
-        local port="${rule%%:*}"
-        local comment="${rule##*:}"
+    # Helper: Add UFW rule with comment (fallback to without comment if unsupported)
+    add_ufw_rule() {
+        local rule="$1"
+        local comment="$2"
         
-        print_info "Allowing $port ($comment)..."
-        if sudo ufw allow "$port" comment "$comment" &>/dev/null; then
-            print_success "Allowed: $port"
-        else
-            print_warning "Failed to add rule for $port"
+        # Check if rule already exists
+        if echo "$ufw_status" | grep -qE "${rule}.*ALLOW"; then
+            log SUCCESS "Rule already exists: $rule"
+            return 0
         fi
-    done
+        
+        # Try with comment first (UFW 0.35+)
+        if sudo ufw allow "$rule" comment "$comment" >> "$LOG_FILE" 2>&1; then
+            log SUCCESS "Allowed $rule ($comment)"
+            return 0
+        fi
+        
+        # Fallback: try without comment
+        if sudo ufw allow "$rule" >> "$LOG_FILE" 2>&1; then
+            log SUCCESS "Allowed $rule"
+            return 0
+        fi
+        
+        log WARN "Failed to add rule for $rule"
+        return 1
+    }
     
-    print_success "Firewall configured"
-    log "Firewall rules added"
+    add_ufw_rule "53/tcp" "Unbound-DNS-TCP"
+    add_ufw_rule "53/udp" "Unbound-DNS-UDP"
+    
+    log SUCCESS "Firewall configuration complete"
+    echo
 }
 
-#################################################################
-# Start Service                                                 #
-#################################################################
+#############################################################################
+# Start Service                                                             #
+#############################################################################
 
 start_service() {
     print_header "Starting Unbound Service"
     
-    print_info "Enabling unbound service..."
+    log STEP "Enabling unbound service..."
     sudo systemctl enable unbound
     
-    print_info "Restarting unbound service..."
+    log STEP "Restarting unbound service..."
     if sudo systemctl restart unbound; then
-        print_success "Unbound service started"
+        log SUCCESS "Unbound service started"
     else
-        print_error "Failed to start unbound service"
-        print_info "Check status with: sudo systemctl status unbound"
+        log ERROR "Failed to start unbound service"
+        log INFO "Check status with: sudo systemctl status unbound"
         return 1
     fi
     
     # Verify it's running
     sleep 2
-    if systemctl is-active --quiet unbound; then
-        print_success "Unbound is running"
+    if service_is_active unbound; then
+        log SUCCESS "Unbound is running"
     else
-        print_warning "Unbound may not be running properly"
+        log WARN "Unbound may not be running properly"
     fi
-    
-    log "Service started"
 }
 
-#################################################################
-# Show Summary                                                  #
-#################################################################
+#############################################################################
+# Show Summary                                                              #
+#############################################################################
 
 show_summary() {
+    local ip_address
+    ip_address=$(get_local_ip)
+    
     echo
-    draw_separator
-    print_success "Unbound DNS Resolver installed successfully!"
+    draw_box "Installation Complete"
+    
     echo
-    print_info "Configuration:"
-    echo "  Domain: $DOMAIN_NAME"
-    echo "  Config: /etc/unbound/unbound.conf"
-    echo "  Log: /var/log/lab/unbound.log"
+    print_header "Configuration"
+    print_kv "Domain" "$DOMAIN_NAME"
+    print_kv "Config File" "/etc/unbound/unbound.conf"
+    print_kv "Installation Log" "$LOG_FILE"
+    
+    echo
+    print_header "Access Information"
+    print_kv "DNS Server" "$ip_address"
+    print_kv "Port" "53 (TCP/UDP)"
+    
     echo
     print_info "Unbound listens on all interfaces with access limited to:"
-    echo "  - Localhost (127.0.0.0/8)"
-    echo "  - Additional VLANs via /etc/unbound/unbound.conf.d/vlans.conf"
+    print_subheader "Localhost (127.0.0.0/8)"
+    print_subheader "Additional VLANs via /etc/unbound/unbound.conf.d/vlans.conf"
+    
     echo
     print_info "Upstream DNS (DNS-over-TLS):"
-    echo "  - Quad9 (9.9.9.9, 149.112.112.112)"
-    echo "  - Cloudflare (1.1.1.1, 1.0.0.1)"
+    print_subheader "Quad9 (9.9.9.9, 149.112.112.112)"
+    print_subheader "Cloudflare (1.1.1.1, 1.0.0.1)"
+    
     echo
-    print_info "Static hosts: /etc/unbound/unbound.conf.d/30-static-hosts.conf"
+    print_header "Management Commands"
+    printf "  %b\n" "${C_DIM}# Check status${C_RESET}"
+    printf "  %b\n" "${C_CYAN}./unbound.sh --status${C_RESET}"
     echo
-    print_info "Test with:"
-    echo "  dig @127.0.0.1 google.com"
-    echo "  dig @127.0.0.1 -x <ip-address>"
+    printf "  %b\n" "${C_DIM}# View logs${C_RESET}"
+    printf "  %b\n" "${C_CYAN}./unbound.sh --logs${C_RESET}"
+    echo
+    printf "  %b\n" "${C_DIM}# Configure VLANs/Hosts${C_RESET}"
+    printf "  %b\n" "${C_CYAN}./unbound.sh --configure${C_RESET}"
+    echo
+    printf "  %b\n" "${C_DIM}# Restart service${C_RESET}"
+    printf "  %b\n" "${C_CYAN}sudo systemctl restart unbound${C_RESET}"
+    
+    echo
+    print_header "Test Commands"
+    printf "  %b\n" "${C_CYAN}dig @127.0.0.1 google.com${C_RESET}"
+    printf "  %b\n" "${C_CYAN}dig @127.0.0.1 -x <ip-address>${C_RESET}"
+    
+    echo
+    print_header "File Locations"
+    print_kv "Static Hosts" "/etc/unbound/unbound.conf.d/30-static-hosts.conf"
+    print_kv "VLAN Config" "/etc/unbound/unbound.conf.d/vlans.conf"
+    
+    echo
     draw_separator
+    echo
+    
+    log INFO "=== Unbound Installation Completed ==="
 }
 
-#################################################################
-# VLAN Configuration Helper                                     #
-#################################################################
+#############################################################################
+# VLAN Configuration Helper                                                 #
+#############################################################################
 
 configure_vlans() {
     print_header "VLAN Access Control Configuration"
@@ -742,7 +1112,7 @@ configure_vlans() {
     local count=0
     
     while true; do
-        echo -ne "\nSubnet $((count + 1)) (or Enter to finish): "
+        echo -ne "\n${C_CYAN}Subnet $((count + 1)) (or Enter to finish): ${C_RESET}"
         read -r line
         
         # Empty line = done
@@ -795,6 +1165,7 @@ configure_vlans() {
     {
         echo "# Auto-generated VLAN access-control + reverse zones for Unbound"
         echo "# Generated: $(date -Is)"
+        echo "# Managed by lab/unbound.sh - do not edit manually"
         echo
         echo "server:"
         echo
@@ -894,7 +1265,7 @@ configure_vlans() {
     draw_separator
     echo
     
-    echo -ne "Write this configuration to $outfile? (yes/no): "
+    echo -ne "${C_CYAN}Write this configuration to $outfile? (yes/no): ${C_RESET}"
     read -r confirm
     
     if [[ "${confirm,,}" != "y" && "${confirm,,}" != "yes" ]]; then
@@ -906,7 +1277,7 @@ configure_vlans() {
     if [[ -f "$outfile" ]]; then
         echo
         print_warning "File already exists: $outfile"
-        echo -ne "Overwrite it? (yes/no): "
+        echo -ne "${C_CYAN}Overwrite it? (yes/no): ${C_RESET}"
         read -r overwrite
         
         if [[ "${overwrite,,}" != "y" && "${overwrite,,}" != "yes" ]]; then
@@ -928,19 +1299,17 @@ configure_vlans() {
     sudo systemctl reload unbound
     
     echo
-    print_success "VLAN configuration installed: $outfile"
-    print_info "Loaded VLANs: $loaded"
-    print_info "Reverse zones (/24): $reverse24"
+    log SUCCESS "VLAN configuration installed: $outfile"
+    log INFO "Loaded VLANs: $loaded"
+    log INFO "Reverse zones (/24): $reverse24"
     if (( skipped > 0 )); then
-        print_warning "Skipped entries: $skipped"
+        log WARN "Skipped entries: $skipped"
     fi
-    
-    log "VLAN configuration completed: $loaded subnets"
 }
 
-#################################################################
-# Static Hosts Configuration Helper                             #
-#################################################################
+#############################################################################
+# Static Hosts Configuration Helper                                         #
+#############################################################################
 
 configure_static_hosts() {
     print_header "Static DNS Hosts Configuration"
@@ -961,7 +1330,7 @@ configure_static_hosts() {
     # Get domain name
     local domain=""
     while true; do
-        echo -ne "Enter your local domain name (e.g., home.local, lan.example.com): "
+        echo -ne "${C_CYAN}Enter your local domain name (e.g., home.local, lan.example.com): ${C_RESET}"
         read -r domain
         echo
         
@@ -982,7 +1351,7 @@ configure_static_hosts() {
         break
     done
     
-    print_success "Domain set to: $domain"
+    log SUCCESS "Domain set to: $domain"
     echo
     draw_separator
     echo
@@ -1002,7 +1371,7 @@ configure_static_hosts() {
     local count=0
     
     while true; do
-        echo -ne "\nHost $((count + 1)) (or Enter to finish): "
+        echo -ne "\n${C_CYAN}Host $((count + 1)) (or Enter to finish): ${C_RESET}"
         read -r line
         
         # Empty line = done
@@ -1066,7 +1435,7 @@ configure_static_hosts() {
     )"
     
     echo
-    print_success "Hosts received (sorted by IP)."
+    log SUCCESS "Hosts received (sorted by IP)."
     
     # Sanitize label function
     sanitize_label() {
@@ -1097,6 +1466,7 @@ configure_static_hosts() {
         echo "# Auto-generated static hosts for Unbound"
         echo "# Domain: ${domain}"
         echo "# Generated: $(date -Is)"
+        echo "# Managed by lab/unbound.sh - do not edit manually"
         echo
         echo "server:"
         echo
@@ -1192,7 +1562,7 @@ configure_static_hosts() {
     draw_separator
     echo
     
-    echo -ne "Write this configuration to $outfile? (yes/no): "
+    echo -ne "${C_CYAN}Write this configuration to $outfile? (yes/no): ${C_RESET}"
     read -r confirm
     
     if [[ "${confirm,,}" != "y" && "${confirm,,}" != "yes" ]]; then
@@ -1204,7 +1574,7 @@ configure_static_hosts() {
     if [[ -f "$outfile" ]]; then
         echo
         print_warning "File already exists: $outfile"
-        echo -ne "Overwrite it? (yes/no): "
+        echo -ne "${C_CYAN}Overwrite it? (yes/no): ${C_RESET}"
         read -r overwrite
         
         if [[ "${overwrite,,}" != "y" && "${overwrite,,}" != "yes" ]]; then
@@ -1226,21 +1596,25 @@ configure_static_hosts() {
     sudo systemctl reload unbound
     
     echo
-    print_success "Static hosts configuration installed: $outfile"
-    print_info "Loaded hosts: $loaded"
+    log SUCCESS "Static hosts configuration installed: $outfile"
+    log INFO "Loaded hosts: $loaded"
     if (( skipped > 0 )); then
-        print_warning "Skipped entries: $skipped"
+        log WARN "Skipped entries: $skipped"
     fi
-    
-    log "Static hosts configuration completed: $loaded records"
 }
 
-#################################################################
-# Post-Installation Configuration Menu                          #
-#################################################################
+#############################################################################
+# Post-Installation Configuration Menu                                      #
+#############################################################################
 
 post_install_config() {
     print_header "Additional Configuration"
+    
+    # Skip in silent mode
+    if is_silent; then
+        log INFO "Skipping additional configuration (silent mode)"
+        return 0
+    fi
     
     echo
     print_info "Unbound is now installed and running with default settings."
@@ -1252,14 +1626,14 @@ post_install_config() {
     echo
     
     while true; do
-        echo -ne "Select option [1-3]: "
+        echo -ne "${C_CYAN}Select option [1-3]: ${C_RESET}"
         read -r choice
         
         case "$choice" in
             1)
                 configure_vlans
                 echo
-                echo -ne "Would you also like to configure static hosts? (yes/no): "
+                echo -ne "${C_CYAN}Would you also like to configure static hosts? (yes/no): ${C_RESET}"
                 read -r also_hosts
                 if [[ "${also_hosts,,}" == "y" || "${also_hosts,,}" == "yes" ]]; then
                     configure_static_hosts
@@ -1269,7 +1643,7 @@ post_install_config() {
             2)
                 configure_static_hosts
                 echo
-                echo -ne "Would you also like to configure VLANs? (yes/no): "
+                echo -ne "${C_CYAN}Would you also like to configure VLANs? (yes/no): ${C_RESET}"
                 read -r also_vlans
                 if [[ "${also_vlans,,}" == "y" || "${also_vlans,,}" == "yes" ]]; then
                     configure_vlans
@@ -1278,9 +1652,9 @@ post_install_config() {
                 ;;
             3)
                 print_info "Skipping additional configuration."
-                print_info "You can configure these later by editing:"
-                echo "  VLANs: /etc/unbound/unbound.conf.d/vlans.conf"
-                echo "  Hosts: /etc/unbound/unbound.conf.d/30-static-hosts.conf"
+                print_info "You can configure these later by running:"
+                echo "  ${C_CYAN}./unbound.sh --vlans${C_RESET}"
+                echo "  ${C_CYAN}./unbound.sh --hosts${C_RESET}"
                 break
                 ;;
             *)
@@ -1290,32 +1664,31 @@ post_install_config() {
     done
 }
 
-#################################################################
-# Prompt for Reboot                                             #
-#################################################################
+#############################################################################
+# Prompt for Reboot                                                         #
+#############################################################################
 
 prompt_reboot() {
-    # Skip if environment variable set
-    if [[ "${UNBOUND_SKIP_REBOOT:-}" == "true" ]]; then
-        print_info "Skipping reboot (UNBOUND_SKIP_REBOOT=true)"
+    # Skip if environment variable set or silent mode
+    if [[ "${UNBOUND_SKIP_REBOOT:-}" == "true" ]] || is_silent; then
+        log INFO "Skipping reboot prompt"
         return 0
     fi
     
     echo
     while true; do
-        echo -ne "Do you want to reboot the server now (recommended)? (yes/no): "
+        echo -ne "${C_CYAN}Do you want to reboot the server now (recommended)? (yes/no): ${C_RESET}"
         read -r response
         echo
         
         case "${response,,}" in
             yes|y)
-                print_info "Rebooting the server..."
-                log "User requested reboot"
+                log INFO "Rebooting the server..."
                 sudo reboot
                 exit 0
                 ;;
             no|n)
-                print_info "Reboot cancelled"
+                log INFO "Reboot cancelled"
                 print_warning "A reboot is recommended to ensure all changes take effect"
                 return 0
                 ;;
@@ -1326,21 +1699,212 @@ prompt_reboot() {
     done
 }
 
-#################################################################
-# Main Function                                                 #
-#################################################################
+#############################################################################
+# Post-Install Commands                                                     #
+#############################################################################
+
+cmd_status() {
+    print_header "Unbound DNS Status"
+    
+    local version
+    version=$(unbound -V 2>/dev/null | head -1 | awk '{print $2}' || echo "unknown")
+    
+    print_kv "Version" "$version"
+    print_kv "Service Status" "$(systemctl is-active unbound 2>/dev/null || echo 'unknown')"
+    print_kv "Enabled" "$(systemctl is-enabled unbound 2>/dev/null || echo 'unknown')"
+    
+    echo
+    print_header "Access Information"
+    print_kv "DNS Server" "$(get_local_ip)"
+    print_kv "Port" "53 (TCP/UDP)"
+    
+    echo
+    print_header "Configuration Files"
+    print_kv "Main Config" "/etc/unbound/unbound.conf"
+    print_kv "VLAN Config" "/etc/unbound/unbound.conf.d/vlans.conf"
+    print_kv "Static Hosts" "/etc/unbound/unbound.conf.d/30-static-hosts.conf"
+    
+    echo
+    print_header "Quick Test"
+    echo "  ${C_CYAN}dig @127.0.0.1 google.com${C_RESET}"
+    
+    echo
+}
+
+cmd_logs() {
+    local lines="${1:-50}"
+    
+    print_header "Unbound Logs (last $lines lines)"
+    echo
+    
+    sudo journalctl -u unbound -n "$lines" --no-pager
+}
+
+cmd_configure() {
+    # Verify sudo access
+    if ! sudo -v 2>/dev/null; then
+        die "This operation requires sudo privileges"
+    fi
+    
+    post_install_config
+}
+
+cmd_uninstall() {
+    # Verify sudo access
+    if ! sudo -v 2>/dev/null; then
+        die "This operation requires sudo privileges"
+    fi
+    
+    print_header "Uninstall Unbound"
+    
+    if ! command_exists unbound; then
+        print_info "Unbound is not installed"
+        exit 0
+    fi
+    
+    print_warning "This will remove:"
+    print_subheader "Unbound package"
+    print_subheader "Configuration files in /etc/unbound/"
+    print_subheader "Firewall rules (if UFW active)"
+    
+    if ! is_silent; then
+        echo
+        while true; do
+            echo -n "${C_BOLD}${C_RED}Are you sure? ${C_RESET}${C_DIM}(yes/no)${C_RESET} "
+            read -r choice
+            choice=$(echo "$choice" | tr '[:upper:]' '[:lower:]')
+            
+            case "$choice" in
+                yes|y) break ;;
+                no|n)
+                    print_info "Uninstall cancelled"
+                    exit 0
+                    ;;
+                *) print_error "Invalid input. Please enter 'yes' or 'no'" ;;
+            esac
+        done
+    fi
+    
+    # Stop and disable service
+    print_step "Stopping service..."
+    sudo systemctl stop unbound 2>/dev/null || true
+    sudo systemctl disable unbound 2>/dev/null || true
+    
+    # Remove package
+    print_step "Removing unbound package..."
+    sudo apt-get remove --purge -y unbound unbound-anchor 2>/dev/null || true
+    sudo apt-get autoremove -y 2>/dev/null || true
+    
+    # Remove configuration
+    print_step "Removing configuration files..."
+    sudo rm -rf /etc/unbound 2>/dev/null || true
+    
+    # Remove cron entry
+    print_step "Removing cron entry..."
+    if crontab -l 2>/dev/null | grep -q "root.hints.*unbound"; then
+        crontab -l 2>/dev/null | grep -v "root.hints.*unbound" | grep -v "# Update root hints" | crontab - 2>/dev/null || true
+    fi
+    
+    # Remove firewall rules (only if UFW active)
+    if sudo ufw status 2>/dev/null | grep -q "Status: active"; then
+        print_step "Removing firewall rules..."
+        sudo ufw delete allow 53/tcp 2>/dev/null || true
+        sudo ufw delete allow 53/udp 2>/dev/null || true
+    fi
+    
+    log SUCCESS "Unbound has been removed"
+    echo
+}
+
+#############################################################################
+# Main Function                                                             #
+#############################################################################
 
 main() {
+    # Handle post-install commands
+    case "${1:-}" in
+        --status)
+            cmd_status
+            exit 0
+            ;;
+        --logs)
+            cmd_logs "${2:-50}"
+            exit 0
+            ;;
+        --configure|--config|-c)
+            setup_logging
+            cmd_configure
+            exit 0
+            ;;
+        --vlans)
+            setup_logging
+            configure_vlans
+            exit 0
+            ;;
+        --hosts)
+            setup_logging
+            configure_static_hosts
+            exit 0
+            ;;
+        --uninstall)
+            setup_logging
+            cmd_uninstall
+            exit 0
+            ;;
+        --version|-v)
+            echo "${SCRIPT_NAME}.sh v${SCRIPT_VERSION}"
+            exit 0
+            ;;
+        "")
+            ;; # Continue with installation
+        *)
+            die "Unknown option: $1 (use --help for usage)"
+            ;;
+    esac
+    
+    # Early sudo check (before logging)
+    if ! command -v sudo >/dev/null 2>&1; then
+        echo "ERROR: sudo is not installed" >&2
+        exit 1
+    fi
+    if [[ ${EUID} -eq 0 ]]; then
+        echo "ERROR: Do not run as root" >&2
+        exit 1
+    fi
+    if ! sudo -v 2>/dev/null; then
+        echo "ERROR: No sudo privileges" >&2
+        exit 1
+    fi
+    
+    # Check if already installed (idempotency)
+    if command_exists unbound && service_is_active unbound; then
+        print_header "Unbound Already Installed"
+        print_info "Unbound is already installed and running."
+        echo
+        print_info "Available options:"
+        echo "  ${C_CYAN}./unbound.sh --status${C_RESET}      Show status"
+        echo "  ${C_CYAN}./unbound.sh --configure${C_RESET}   Configure VLANs/hosts"
+        echo "  ${C_CYAN}./unbound.sh --uninstall${C_RESET}   Remove Unbound"
+        echo
+        
+        if ! is_silent; then
+            echo -ne "${C_CYAN}Run configuration menu? (yes/no): ${C_RESET}"
+            read -r run_config
+            if [[ "${run_config,,}" == "y" || "${run_config,,}" == "yes" ]]; then
+                setup_logging
+                cmd_configure
+            fi
+        fi
+        exit 0
+    fi
+    
     clear
+    draw_box "Unbound DNS Resolver Installer v${SCRIPT_VERSION}"
     
-    echo -e "${C_CYAN:-\033[0;36m}╔════════════════════════════════════════════════════════════╗${C_RESET:-\033[0m}"
-    echo -e "${C_CYAN:-\033[0;36m}║          Unbound DNS Resolver Installer v${VERSION}          ║${C_RESET:-\033[0m}"
-    echo -e "${C_CYAN:-\033[0;36m}║          https://github.com/vdarkobar/lab                  ║${C_RESET:-\033[0m}"
-    echo -e "${C_CYAN:-\033[0;36m}╚════════════════════════════════════════════════════════════╝${C_RESET:-\033[0m}"
-    
+    # Setup logging
     setup_logging
     
-    # Run all steps
+    # Run all installation steps
     preflight_checks
     detect_domain_name
     install_unbound
@@ -1352,7 +1916,7 @@ main() {
     start_service
     show_summary
     
-    log "Unbound installation completed successfully"
+    log INFO "Unbound installation completed successfully"
     
     # Offer additional configuration
     post_install_config
@@ -1360,52 +1924,4 @@ main() {
     prompt_reboot
 }
 
-# Argument handling
-case "${1:-}" in
-    --configure|--config|-c)
-        setup_logging
-        post_install_config
-        ;;
-    --vlans)
-        setup_logging
-        configure_vlans
-        ;;
-    --hosts)
-        setup_logging
-        configure_static_hosts
-        ;;
-    --help|-h)
-        echo "Unbound DNS Resolver Installer v${VERSION}"
-        echo
-        echo "Usage: $0 [OPTION]"
-        echo
-        echo "Installation:"
-        echo "  bootstrap.sh → hardening.sh → Select \"Unbound DNS\""
-        echo
-        echo "Options:"
-        echo "  (none)        Full installation"
-        echo "  --configure   Run configuration menu (VLANs, hosts)"
-        echo "  --vlans       Configure VLAN access control only"
-        echo "  --hosts       Configure static DNS hosts only"
-        echo "  --help        Show this help"
-        echo
-        echo "Environment variables (for non-interactive mode):"
-        echo "  UNBOUND_DOMAIN        Local domain name (default: from resolv.conf)"
-        echo "  UNBOUND_SKIP_REBOOT   Set to \"true\" to skip reboot prompt"
-        echo
-        echo "Examples:"
-        echo "  $0                        # Fresh install"
-        echo "  $0 --hosts                # Add/update static DNS records"
-        echo "  $0 --vlans                # Add/update allowed subnets"
-        echo "  UNBOUND_DOMAIN=home.local UNBOUND_SKIP_REBOOT=true $0"
-        echo
-        echo "Files created:"
-        echo "  /etc/unbound/unbound.conf                      Main config"
-        echo "  /etc/unbound/unbound.conf.d/vlans.conf         VLAN access control"
-        echo "  /etc/unbound/unbound.conf.d/30-static-hosts.conf  Static DNS records"
-        echo "  /var/log/lab/unbound.log                       Installation log"
-        ;;
-    *)
-        main "$@"
-        ;;
-esac
+main "$@"

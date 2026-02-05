@@ -1,29 +1,23 @@
 #!/bin/bash
+readonly SCRIPT_VERSION="3.0.0"
+readonly SCRIPT_NAME="bentopdf"
 
-#############################################################################
-# BentoPDF Installation Script                                              #
-# Self-hosted PDF toolkit with modern web interface                         #
-#############################################################################
-
-readonly SCRIPT_VERSION="2.3.0"
-
-# Handle --help flag early (before defining functions)
+# Handle --help early (before defining functions)
 case "${1:-}" in
     --help|-h)
         echo "BentoPDF Installer v${SCRIPT_VERSION}"
         echo
-        echo "Usage: $0 [--help] [--force]"
-        echo
-        echo "Installation:"
-        echo "  bootstrap.sh → hardening.sh → Select \"BentoPDF\""
-        echo "  OR run standalone after hardening"
+        echo "Usage: $0 [--help] [--status] [--logs [N]] [--configure] [--uninstall] [--force]"
         echo
         echo "Requirements:"
         echo "  - Must run as NON-ROOT user with sudo privileges"
         echo "  - Do NOT run with: sudo $0"
         echo "  - Internet connectivity required"
-        echo "  - Port 8080 must be available (or set BENTOPDF_PORT)"
         echo "  - Minimum 2GB RAM recommended for build process"
+        echo
+        echo "Installation:"
+        echo "  bootstrap.sh → hardening.sh → Select \"BentoPDF\""
+        echo "  OR run standalone after hardening"
         echo
         echo "What it does:"
         echo "  - Installs Node.js 24.x from NodeSource"
@@ -32,72 +26,53 @@ case "${1:-}" in
         echo "  - Creates systemd service for auto-start"
         echo "  - Configures UFW firewall rules"
         echo
-        echo "Options:"
-        echo "  --force    Remove existing installation and reinstall"
-        echo
         echo "Environment variables:"
-        echo "  BENTOPDF_PORT=<port>       Override default port (default: 8080)"
-        echo "  BENTOPDF_BIND=<ip>         Bind address (default: 0.0.0.0, use 127.0.0.1 for local only)"
+        echo "  BENTOPDF_SILENT=true     Non-interactive mode"
+        echo "  BENTOPDF_SKIP_UFW=true   Skip firewall configuration"
+        echo "  BENTOPDF_PORT=8080       Override default port (default: 8080)"
+        echo "  BENTOPDF_BIND=0.0.0.0    Bind address (default: 0.0.0.0, use 127.0.0.1 for local only)"
+        echo
+        echo "Post-install commands:"
+        echo "  --status      Show service status and access info"
+        echo "  --logs [N]    Show last N lines of logs (default: 50)"
+        echo "  --configure   Reconfigure and restart service"
+        echo "  --uninstall   Remove BentoPDF completely"
+        echo "  --force       Remove existing installation and reinstall"
+        echo
+        echo "Network requirements:"
+        echo "  Inbound ${BENTOPDF_PORT:-8080}/tcp    BentoPDF web interface"
         echo
         echo "Files created:"
         echo "  /opt/bentopdf/                        Application directory"
         echo "  /etc/systemd/system/bentopdf.service  Systemd service"
-        echo "  /var/log/lab/bentopdf-*.log           Installation log"
-        echo
-        echo "Default access:"
-        echo "  http://<server-ip>:8080"
+        echo "  /var/log/lab/bentopdf-*.log           Installation logs"
         exit 0
         ;;
 esac
 
-#############################################################################
-# Professional edition with enhanced output formatting                      #
-#                                                                           #
-# EXECUTION REQUIREMENTS:                                                   #
-#   - Must be run as a NON-ROOT user                                        #
-#   - User must have sudo privileges                                        #
-#   - Script will use sudo internally for privileged operations             #
-#                                                                           #
-# CORRECT USAGE:                                                            #
-#   ./bentopdf.sh                                                           #
-#                                                                           #
-# INCORRECT USAGE:                                                          #
-#   sudo ./bentopdf.sh  ← DO NOT DO THIS                                    #
-#   # ./bentopdf.sh     ← DO NOT DO THIS                                    #
-#############################################################################
-
-set -euo pipefail  # Exit on error, undefined vars, pipe failures
-
-#############################################################################
-# Script Configuration                                                      #
-#############################################################################
-
-# Get the directory where this script is located
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+set -euo pipefail
+export DEBIAN_FRONTEND=noninteractive
 
 # Track services we stop (to restart on cleanup)
 UNATTENDED_UPGRADES_WAS_ACTIVE=false
+
+# App config (env overrides)
+BENTOPDF_SILENT="${BENTOPDF_SILENT:-false}"; SILENT="$BENTOPDF_SILENT"
+BENTOPDF_SKIP_UFW="${BENTOPDF_SKIP_UFW:-false}"; SKIP_FIREWALL="$BENTOPDF_SKIP_UFW"
+BENTOPDF_PORT="${BENTOPDF_PORT:-8080}"; APP_PORT="$BENTOPDF_PORT"
+BENTOPDF_BIND="${BENTOPDF_BIND:-0.0.0.0}"
+
+# Force reinstall flag (set by --force in main)
+FORCE_INSTALL=false
 
 # Installation paths
 readonly INSTALL_DIR="/opt/bentopdf"
 readonly NODE_MAJOR="24"
 readonly BENTOPDF_REPO="alam00000/bentopdf"
 
-# Configurable options with defaults
-BENTOPDF_PORT="${BENTOPDF_PORT:-8080}"
-BENTOPDF_BIND="${BENTOPDF_BIND:-0.0.0.0}"
-
 # Logging
 readonly LOG_DIR="/var/log/lab"
-LOG_FILE=""  # Set after sudo verification
-
-# Handle --force flag
-FORCE_INSTALL=false
-for arg in "$@"; do
-    case "$arg" in
-        --force|-f) FORCE_INSTALL=true ;;
-    esac
-done
+readonly LOG_FILE="${LOG_DIR}/${SCRIPT_NAME}-$(date +%Y%m%d-%H%M%S).log"
 
 #############################################################################
 # Terminal Formatting (embedded - no external dependency)                   #
@@ -107,22 +82,17 @@ done
 if [[ -t 1 ]] && command -v tput >/dev/null 2>&1 && tput setaf 1 >/dev/null 2>&1; then
     COLORS_SUPPORTED=true
     
-    # Colors
     readonly C_RESET=$(tput sgr0)
     readonly C_BOLD=$(tput bold)
     readonly C_DIM=$(tput dim)
     
-    # Foreground colors
-    readonly C_BLACK=$(tput setaf 0)
     readonly C_RED=$(tput setaf 1)
     readonly C_GREEN=$(tput setaf 2)
     readonly C_YELLOW=$(tput setaf 3)
     readonly C_BLUE=$(tput setaf 4)
-    readonly C_MAGENTA=$(tput setaf 5)
     readonly C_CYAN=$(tput setaf 6)
     readonly C_WHITE=$(tput setaf 7)
     
-    # Bright colors (if supported)
     readonly C_BRIGHT_GREEN=$(tput setaf 10 2>/dev/null || tput setaf 2)
     readonly C_BRIGHT_RED=$(tput setaf 9 2>/dev/null || tput setaf 1)
     readonly C_BRIGHT_YELLOW=$(tput setaf 11 2>/dev/null || tput setaf 3)
@@ -132,12 +102,10 @@ else
     readonly C_RESET=""
     readonly C_BOLD=""
     readonly C_DIM=""
-    readonly C_BLACK=""
     readonly C_RED=""
     readonly C_GREEN=""
     readonly C_YELLOW=""
     readonly C_BLUE=""
-    readonly C_MAGENTA=""
     readonly C_CYAN=""
     readonly C_WHITE=""
     readonly C_BRIGHT_GREEN=""
@@ -234,16 +202,16 @@ draw_separator() {
 #############################################################################
 
 log() {
-    local level="$1"
-    shift
+    local level="$1"; shift
     local message="$*"
-    local timestamp=$(date +"%Y-%m-%d %H:%M:%S")
-    
+    local timestamp
+    timestamp=$(date +"%Y-%m-%d %H:%M:%S")
+
     # Write plain text to log file (strip ANSI color codes)
     if [[ -n "${LOG_FILE:-}" ]] && [[ -w "${LOG_FILE:-}" || -w "$(dirname "${LOG_FILE:-/tmp}")" ]]; then
         echo "[$timestamp] [$level] $message" | sed 's/\x1b\[[0-9;]*m//g' >> "$LOG_FILE" 2>/dev/null || true
     fi
-    
+
     # Display to console with formatting
     case "$level" in
         SUCCESS) print_success "$message" ;;
@@ -256,12 +224,32 @@ log() {
 }
 
 die() {
-    print_error "$@"
+    local msg="$*"
+    log ERROR "$msg"
     exit 1
 }
 
+setup_logging() {
+    # Note: sudo existence check should be done BEFORE calling this function
+    
+    # Create log directory with sudo
+    if [[ ! -d "$LOG_DIR" ]]; then
+        sudo mkdir -p "$LOG_DIR" 2>/dev/null || true
+    fi
+
+    # Create log file and set ownership to current user
+    sudo touch "$LOG_FILE" 2>/dev/null || true
+    sudo chown "$(whoami):$(id -gn)" "$LOG_FILE" 2>/dev/null || true
+    sudo chmod 644 "$LOG_FILE" 2>/dev/null || true
+
+    log INFO "=== ${SCRIPT_NAME} Started ==="
+    log INFO "Version: $SCRIPT_VERSION"
+    log INFO "User: $(whoami)"
+    log INFO "Date: $(date)"
+}
+
 # Error trap for better debugging (set after print_error is defined)
-trap 'print_error "Error on line $LINENO: $BASH_COMMAND"' ERR
+trap 'print_error "Error at line $LINENO: $BASH_COMMAND"; log ERROR "Error at line $LINENO: $BASH_COMMAND"' ERR
 
 #############################################################################
 # Cleanup / Restore Services                                                #
@@ -270,18 +258,50 @@ trap 'print_error "Error on line $LINENO: $BASH_COMMAND"' ERR
 cleanup() {
     local exit_code=$?
     
-    # Restore unattended-upgrades if we stopped it
+    # Restart unattended-upgrades if we stopped it
     if [[ "$UNATTENDED_UPGRADES_WAS_ACTIVE" == true ]]; then
         if sudo systemctl start unattended-upgrades 2>/dev/null; then
-            print_info "Restored unattended-upgrades service"
+            print_info "Restarted unattended-upgrades service"
         fi
+    fi
+    
+    if [[ $exit_code -ne 0 ]]; then
+        log ERROR "Installation failed - check log: $LOG_FILE"
     fi
     
     exit $exit_code
 }
 
-# Register cleanup on exit (normal or error)
-trap cleanup EXIT
+trap cleanup EXIT INT TERM
+
+#############################################################################
+# Helper Functions                                                          #
+#############################################################################
+
+is_silent() {
+    [[ "${SILENT:-false}" == "true" ]]
+}
+
+command_exists() {
+    command -v "$1" &>/dev/null
+}
+
+service_is_active() {
+    systemctl is-active --quiet "$1" 2>/dev/null
+}
+
+service_is_enabled() {
+    systemctl is-enabled --quiet "$1" 2>/dev/null
+}
+
+# Uses ip route first, hostname -I as fallback
+get_local_ip() {
+    local ip_address
+    ip_address=$(ip route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}')
+    [[ -z "$ip_address" ]] && ip_address=$(hostname -I 2>/dev/null | awk '{print $1}')
+    ip_address=${ip_address:-"localhost"}
+    echo "$ip_address"
+}
 
 #############################################################################
 # Input Validation                                                          #
@@ -289,12 +309,12 @@ trap cleanup EXIT
 
 validate_configuration() {
     # Validate BENTOPDF_PORT
-    if [[ ! "$BENTOPDF_PORT" =~ ^[0-9]+$ ]]; then
-        die "Invalid BENTOPDF_PORT: '$BENTOPDF_PORT' (must be a number)"
+    if [[ ! "$APP_PORT" =~ ^[0-9]+$ ]]; then
+        die "Invalid BENTOPDF_PORT: '$APP_PORT' (must be a number)"
     fi
     
-    if [[ "$BENTOPDF_PORT" -lt 1 ]] || [[ "$BENTOPDF_PORT" -gt 65535 ]]; then
-        die "Invalid BENTOPDF_PORT: $BENTOPDF_PORT (must be 1-65535)"
+    if [[ "$APP_PORT" -lt 1 ]] || [[ "$APP_PORT" -gt 65535 ]]; then
+        die "Invalid BENTOPDF_PORT: $APP_PORT (must be 1-65535)"
     fi
     
     # Validate BENTOPDF_BIND (basic IP format check)
@@ -311,8 +331,8 @@ detect_network_info() {
     # Get hostname
     HOSTNAME=$(hostname -s) || HOSTNAME="unknown"
     
-    # Detect domain name
-    if command -v resolvectl >/dev/null 2>&1 && systemctl is-active --quiet systemd-resolved; then
+    # Detect domain name (resolvectl first, then resolv.conf)
+    if command_exists resolvectl && service_is_active systemd-resolved; then
         DOMAIN_LOCAL=$(resolvectl status | awk '/DNS Domain:/ {print $3; exit}' | head -n1)
     fi
     
@@ -325,73 +345,7 @@ detect_network_info() {
     DOMAIN_LOCAL=${DOMAIN_LOCAL:-"local"}
     
     # Detect primary IP address
-    LOCAL_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
-    
-    # Fallback IP detection
-    if [[ -z "$LOCAL_IP" ]] || [[ "$LOCAL_IP" == "127.0.0.1" ]]; then
-        LOCAL_IP=$(ip -4 addr show scope global | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -n1)
-    fi
-    
-    # Final fallback
-    LOCAL_IP=${LOCAL_IP:-"127.0.0.1"}
-}
-
-#############################################################################
-# Previous Installation Detection                                           #
-#############################################################################
-
-check_previous_installation() {
-    # Check for BentoPDF installation marker
-    if [[ -f /etc/systemd/system/bentopdf.service ]] && [[ -d "$INSTALL_DIR" ]]; then
-        return 0  # Previously installed
-    fi
-    return 1  # Not installed yet
-}
-
-show_already_installed_menu() {
-    clear
-    draw_box "BentoPDF Already Installed"
-    
-    echo
-    print_header "Installation Status"
-    
-    # Show what's installed
-    [[ -d "$INSTALL_DIR" ]] && print_success "Application directory exists"
-    [[ -f /etc/systemd/system/bentopdf.service ]] && print_success "Systemd service configured"
-    
-    # Check service status
-    echo
-    print_header "Service Status"
-    if systemctl is-active --quiet bentopdf 2>/dev/null; then
-        print_success "BentoPDF: running"
-    else
-        print_warning "BentoPDF: not running"
-    fi
-    
-    # Show access URL
-    echo
-    print_header "Access Information"
-    print_kv "BentoPDF URL" "http://${LOCAL_IP}:${BENTOPDF_PORT}"
-    
-    echo
-    print_header "Management Commands"
-    printf "  %b\n" "${C_DIM}# Check status${C_RESET}"
-    printf "  %b\n" "${C_CYAN}systemctl status bentopdf${C_RESET}"
-    echo
-    printf "  %b\n" "${C_DIM}# View logs${C_RESET}"
-    printf "  %b\n" "${C_CYAN}journalctl -u bentopdf -f${C_RESET}"
-    echo
-    printf "  %b\n" "${C_DIM}# Restart service${C_RESET}"
-    printf "  %b\n" "${C_CYAN}sudo systemctl restart bentopdf${C_RESET}"
-    
-    echo
-    print_header "Reinstall Option"
-    print_info "To reinstall, run with --force flag:"
-    printf "  %b\n" "${C_CYAN}./bentopdf.sh --force${C_RESET}"
-    
-    echo
-    draw_separator
-    echo
+    LOCAL_IP=$(get_local_ip)
 }
 
 #############################################################################
@@ -400,7 +354,7 @@ show_already_installed_menu() {
 
 preflight_checks() {
     print_header "Pre-flight Checks"
-    
+
     # CRITICAL: Enforce non-root execution
     if [[ ${EUID} -eq 0 ]]; then
         echo
@@ -414,100 +368,228 @@ preflight_checks() {
         die "Execution blocked: Running as root user"
     fi
     print_success "Running as non-root user: ${C_BOLD}$(whoami)${C_RESET}"
-    
-    # Verify sudo access
+
+    # sudo must exist on minimal images
+    if ! command -v sudo >/dev/null 2>&1; then
+        echo
+        print_error "sudo is not installed. This script requires sudo."
+        echo
+        print_info "Fix (run as root):"
+        echo "  apt-get update && apt-get install -y sudo"
+        echo "  usermod -aG sudo $(whoami)"
+        echo "  # then logout/login"
+        echo
+        die "Execution blocked: sudo not installed"
+    fi
+
+    # Verify sudo access (may prompt)
     if ! sudo -v 2>/dev/null; then
         echo
         print_error "User $(whoami) does not have sudo privileges"
         echo
-        print_info "To grant sudo access, run as root:"
+        print_info "To grant sudo access (run as root):"
         echo "  ${C_CYAN}usermod -aG sudo $(whoami)${C_RESET}"
-        echo "  ${C_CYAN}# Then logout and login again${C_RESET}"
+        echo "  ${C_CYAN}# then logout/login${C_RESET}"
         echo
         die "Execution blocked: No sudo privileges"
     fi
     print_success "Sudo privileges confirmed"
-    
-    # Test sudo authentication
-    if ! sudo -n true 2>/dev/null; then
-        print_info "Sudo authentication required"
-        if ! sudo -v; then
-            die "Sudo authentication failed"
-        fi
-    fi
-    print_success "Sudo authentication successful"
-    
-    # Check if running on PVE host
-    if [[ -f /etc/pve/.version ]] || command -v pveversion &>/dev/null; then
-        die "This script should not run on Proxmox VE host. Run inside a VM or LXC."
+
+    # Check if running on PVE host (should not be)
+    if [[ -f /etc/pve/.version ]] || command_exists pveversion; then
+        die "This script must not run on the Proxmox VE host. Run inside a VM or LXC container."
     fi
     print_success "Not running on Proxmox host"
-    
-    # Check for systemd (robust check - verify it's actually running as PID1)
-    # Fix #4: /run/systemd/system exists only when systemd is the init system
-    if [[ ! -d /run/systemd/system ]]; then
-        die "systemd is not running (container not systemd-enabled?)"
+
+    # Check for systemd (required)
+    if ! command_exists systemctl; then
+        die "systemd not found (is this container systemd-enabled?)"
     fi
-    print_success "systemd is running"
-    
-    # Check Debian version
+    print_success "systemd available"
+
+    # Check OS (warn if not Debian)
     if [[ -f /etc/os-release ]]; then
         . /etc/os-release
-        if [[ "$ID" != "debian" ]]; then
-            print_warning "This script is designed for Debian. Detected: $ID"
+        if [[ "${ID:-}" != "debian" ]]; then
+            print_warning "Designed for Debian. Detected: ${ID:-unknown}"
         else
-            print_success "Debian system detected: $VERSION"
+            print_success "Debian detected: ${VERSION:-unknown}"
         fi
     else
-        print_warning "Cannot determine OS version"
+        print_warning "Cannot determine OS version (/etc/os-release missing)"
     fi
-    
+
     # Check disk space (need at least 2GB free for Node.js build)
-    local free_space=$(df / | awk 'NR==2 {print $4}')
+    local free_space
+    free_space=$(df / | awk 'NR==2 {print $4}')
     local free_gb=$((free_space / 1048576))
     if [[ $free_space -lt 2097152 ]]; then
         die "Insufficient disk space. Need at least 2GB free, have ${free_gb}GB"
     fi
     print_success "Sufficient disk space available (${free_gb}GB free)"
-    
-    # Check internet connectivity
+
+    # Check internet connectivity (multiple methods for minimal systems)
     print_step "Testing internet connectivity..."
-    if command -v curl >/dev/null 2>&1; then
-        if curl -s --max-time 5 --head https://github.com >/dev/null 2>&1; then
-            print_success "Internet connectivity verified (via curl)"
-        else
-            die "No internet connectivity detected (curl test failed)"
+    local internet_ok=false
+
+    if command_exists curl; then
+        if curl -s --max-time 5 --head https://deb.debian.org >/dev/null 2>&1; then
+            print_success "Internet connectivity verified (curl)"
+            internet_ok=true
         fi
-    elif command -v wget >/dev/null 2>&1; then
-        if wget -q --timeout=5 --spider https://github.com 2>/dev/null; then
-            print_success "Internet connectivity verified (via wget)"
-        else
-            die "No internet connectivity detected (wget test failed)"
-        fi
-    else
-        print_warning "Cannot verify internet (curl/wget not available yet)"
-        print_info "Assuming connectivity OK - will install curl in next step"
     fi
+
+    if [[ "$internet_ok" == false ]] && command_exists wget; then
+        if wget -q --timeout=5 --spider https://deb.debian.org 2>/dev/null; then
+            print_success "Internet connectivity verified (wget)"
+            internet_ok=true
+        fi
+    fi
+
+    if [[ "$internet_ok" == false ]]; then
+        # Bash built-in TCP check (no external tools)
+        if timeout 5 bash -c 'cat < /dev/null > /dev/tcp/deb.debian.org/80' 2>/dev/null; then
+            print_success "Internet connectivity verified (dev/tcp)"
+            internet_ok=true
+        fi
+    fi
+
+    if [[ "$internet_ok" == false ]]; then
+        print_warning "Could not verify internet with available tools"
+        print_info "Will verify connectivity during package installation..."
+    fi
+
+    # Check port availability
+    check_port_availability "$APP_PORT"
+
+    echo
+}
+
+#############################################################################
+# Port Availability Check                                                   #
+#############################################################################
+
+check_port_availability() {
+    local ports=("$@")
+    local ports_in_use=()
     
-    # Fix #6: Check if port is available - FATAL if in use
     print_step "Checking port availability..."
-    if command -v ss >/dev/null 2>&1; then
-        if ss -tuln 2>/dev/null | grep -q ":${BENTOPDF_PORT} "; then
-            echo
-            print_error "Port ${BENTOPDF_PORT} is already in use!"
-            echo
-            print_info "Options:"
-            echo "  ${C_CYAN}1. Stop the service using port ${BENTOPDF_PORT}${C_RESET}"
-            echo "  ${C_CYAN}2. Set a different port: BENTOPDF_PORT=8081 ./bentopdf.sh${C_RESET}"
-            echo
-            die "Port ${BENTOPDF_PORT} is not available"
-        else
-            print_success "Port ${BENTOPDF_PORT} is available"
-        fi
+    
+    if command_exists ss; then
+        for port in "${ports[@]}"; do
+            if ss -tuln 2>/dev/null | grep -q ":${port} "; then
+                ports_in_use+=("$port")
+            fi
+        done
+    elif command_exists netstat; then
+        for port in "${ports[@]}"; do
+            if netstat -tuln 2>/dev/null | grep -q ":${port} "; then
+                ports_in_use+=("$port")
+            fi
+        done
     else
-        print_warning "Cannot check port (ss not available)"
+        print_warning "Cannot check ports (ss/netstat not available)"
+        return 0
     fi
     
+    if [[ ${#ports_in_use[@]} -gt 0 ]]; then
+        echo
+        print_error "Ports already in use: ${ports_in_use[*]}"
+        echo
+        print_info "Options:"
+        echo "  ${C_CYAN}1. Stop the service using port ${ports_in_use[*]}${C_RESET}"
+        echo "  ${C_CYAN}2. Set a different port: BENTOPDF_PORT=8081 ./bentopdf.sh${C_RESET}"
+        echo
+        die "Required ports not available: ${ports_in_use[*]}"
+    fi
+    
+    print_success "Required ports are available: ${ports[*]}"
+    return 0
+}
+
+#############################################################################
+# APT Lock Handling                                                         #
+#############################################################################
+
+prepare_apt() {
+    # Stop unattended-upgrades to avoid apt locks (best-effort)
+    if systemctl is-active --quiet unattended-upgrades 2>/dev/null; then
+        UNATTENDED_UPGRADES_WAS_ACTIVE=true
+        sudo systemctl stop unattended-upgrades 2>/dev/null || true
+        print_info "Temporarily stopped unattended-upgrades"
+    fi
+
+    # Wait for dpkg lock (best-effort)
+    local wait_count=0
+    while sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
+        if [[ $wait_count -eq 0 ]]; then
+            print_subheader "Waiting for apt/dpkg lock..."
+        fi
+        wait_count=$((wait_count + 1))
+        sleep 2
+        if [[ $wait_count -ge 60 ]]; then
+            print_warning "Still waiting for apt lock (60s+) — continuing anyway"
+            break
+        fi
+    done
+}
+
+#############################################################################
+# Previous Installation Detection                                           #
+#############################################################################
+
+check_previous_installation() {
+    if [[ -f /etc/systemd/system/bentopdf.service ]] && [[ -d "$INSTALL_DIR" ]]; then
+        return 0  # Previously installed
+    fi
+    return 1  # Not installed yet
+}
+
+show_already_installed_menu() {
+    local ip_address
+    ip_address=$(get_local_ip)
+    
+    clear
+    draw_box "BentoPDF Already Installed"
+    
+    echo
+    print_header "Installation Status"
+    [[ -d "$INSTALL_DIR" ]] && print_success "Application directory exists"
+    [[ -f /etc/systemd/system/bentopdf.service ]] && print_success "Systemd service configured"
+    
+    echo
+    print_header "Service Status"
+    if service_is_active bentopdf; then
+        print_success "BentoPDF: running"
+    else
+        print_warning "BentoPDF: not running"
+    fi
+    
+    echo
+    print_header "Access Information"
+    print_kv "BentoPDF URL" "http://${ip_address}:${APP_PORT}"
+    
+    echo
+    print_header "Management Commands"
+    printf "  %b\n" "${C_DIM}# Check status${C_RESET}"
+    printf "  %b\n" "${C_CYAN}./${SCRIPT_NAME}.sh --status${C_RESET}"
+    echo
+    printf "  %b\n" "${C_DIM}# View logs${C_RESET}"
+    printf "  %b\n" "${C_CYAN}./${SCRIPT_NAME}.sh --logs${C_RESET}"
+    echo
+    printf "  %b\n" "${C_DIM}# Reconfigure${C_RESET}"
+    printf "  %b\n" "${C_CYAN}./${SCRIPT_NAME}.sh --configure${C_RESET}"
+    echo
+    printf "  %b\n" "${C_DIM}# Restart service${C_RESET}"
+    printf "  %b\n" "${C_CYAN}sudo systemctl restart bentopdf${C_RESET}"
+    
+    echo
+    print_header "Reinstall Option"
+    print_info "To reinstall, run with --force flag:"
+    printf "  %b\n" "${C_CYAN}./${SCRIPT_NAME}.sh --force${C_RESET}"
+    
+    echo
+    draw_separator
     echo
 }
 
@@ -530,7 +612,7 @@ show_intro() {
 }
 
 #############################################################################
-# Show Installation Plan (after preflight)                                  #
+# Show Installation Plan                                                    #
 #############################################################################
 
 show_install_plan() {
@@ -546,12 +628,12 @@ show_install_plan() {
     echo
     print_header "Configuration"
     print_kv "Install Directory" "$INSTALL_DIR"
-    print_kv "Web Port" "$BENTOPDF_PORT"
+    print_kv "Web Port" "$APP_PORT"
     print_kv "Bind Address" "$BENTOPDF_BIND"
     if [[ "$BENTOPDF_BIND" == "127.0.0.1" ]]; then
-        print_kv "Access URL" "http://localhost:${BENTOPDF_PORT} (local only)"
+        print_kv "Access URL" "http://localhost:${APP_PORT} (local only)"
     else
-        print_kv "Access URL" "http://${LOCAL_IP}:${BENTOPDF_PORT}"
+        print_kv "Access URL" "http://${LOCAL_IP}:${APP_PORT}"
     fi
     
     echo
@@ -562,10 +644,15 @@ show_install_plan() {
 }
 
 #############################################################################
-# Confirm Script Execution                                                  #
+# Confirm Installation                                                      #
 #############################################################################
 
 confirm_start() {
+    if is_silent; then
+        log INFO "Silent mode - skipping confirmation"
+        return 0
+    fi
+    
     draw_separator
     echo
     while true; do
@@ -580,7 +667,6 @@ confirm_start() {
                 return 0
                 ;;
             no|n)
-                log INFO "User cancelled installation"
                 print_info "Installation cancelled by user"
                 exit 0
                 ;;
@@ -595,14 +681,18 @@ confirm_start() {
 # Confirm Force Reinstall (destructive action)                              #
 #############################################################################
 
-# Fix #3: Confirm BEFORE deleting anything
 confirm_force_reinstall() {
+    if is_silent; then
+        log INFO "Silent mode - skipping force reinstall confirmation"
+        return 0
+    fi
+    
     echo
     print_warning "This will DELETE the existing BentoPDF installation!"
     echo
     print_info "The following will be removed:"
-    echo "  ${C_RED}• ${INSTALL_DIR}${C_RESET}"
-    echo "  ${C_RED}• /etc/systemd/system/bentopdf.service${C_RESET}"
+    echo "  ${C_RED}${SYMBOL_BULLET} ${INSTALL_DIR}${C_RESET}"
+    echo "  ${C_RED}${SYMBOL_BULLET} /etc/systemd/system/bentopdf.service${C_RESET}"
     echo
     
     while true; do
@@ -622,25 +712,33 @@ confirm_force_reinstall() {
 }
 
 #############################################################################
-# Initialize Logging                                                        #
+# Handle Force Reinstall                                                    #
 #############################################################################
 
-init_logging() {
-    # Create log directory
-    sudo mkdir -p "$LOG_DIR"
-    sudo chown "$(whoami):$(id -gn)" "$LOG_DIR"
+handle_force_reinstall() {
+    print_header "Removing Existing Installation"
     
-    # Set log file path
-    LOG_FILE="${LOG_DIR}/bentopdf-$(date +%Y%m%d-%H%M%S).log"
+    print_step "Stopping BentoPDF service..."
+    sudo systemctl stop bentopdf 2>/dev/null || true
+    sudo systemctl disable bentopdf 2>/dev/null || true
     
-    # Create log file
-    touch "$LOG_FILE"
-    chmod 644 "$LOG_FILE"
+    print_step "Removing systemd service..."
+    sudo rm -f /etc/systemd/system/bentopdf.service
+    sudo systemctl daemon-reload
+    print_success "Removed service file"
     
-    log INFO "=== BentoPDF Installation Started ==="
-    log INFO "Version: $SCRIPT_VERSION"
-    log INFO "User: $(whoami)"
-    log INFO "Date: $(date)"
+    print_step "Removing application directory..."
+    sudo rm -rf "$INSTALL_DIR"
+    print_success "Removed: $INSTALL_DIR"
+    
+    # Remove firewall rules (only if UFW active)
+    if sudo ufw status 2>/dev/null | grep -q "Status: active"; then
+        print_step "Removing firewall rules..."
+        sudo ufw delete allow "${APP_PORT}/tcp" 2>/dev/null || true
+    fi
+    
+    log INFO "Existing installation removed (--force)"
+    echo
 }
 
 #############################################################################
@@ -650,27 +748,7 @@ init_logging() {
 install_base_packages() {
     print_header "Installing Base Packages"
     
-    # Stop unattended upgrades if running (track state to restart later)
-    if systemctl is-active --quiet unattended-upgrades 2>/dev/null; then
-        UNATTENDED_UPGRADES_WAS_ACTIVE=true
-        sudo systemctl stop unattended-upgrades 2>/dev/null || true
-        print_info "Temporarily stopped unattended-upgrades"
-    fi
-    
-    # Wait for apt lock
-    # Fix #1: Use ((++wait_count)) instead of ((wait_count++)) to avoid exit on 0
-    print_step "Waiting for apt lock..."
-    local wait_count=0
-    while sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
-        if [[ $wait_count -eq 0 ]]; then
-            print_subheader "Another process is using apt, waiting..."
-        fi
-        sleep 2
-        ((++wait_count))  # Pre-increment returns new value, safe with set -e
-        if [[ $wait_count -gt 30 ]]; then
-            die "Timed out waiting for apt lock"
-        fi
-    done
+    prepare_apt
     
     # Update package lists
     print_step "Updating package repositories..."
@@ -679,7 +757,6 @@ install_base_packages() {
     fi
     print_success "Package lists updated"
     
-    # Fix #8: Include build-essential for potential native npm dependencies
     local packages=(
         build-essential
         ca-certificates
@@ -694,7 +771,7 @@ install_base_packages() {
     
     print_step "Installing packages..."
     print_subheader "${C_DIM}${packages[*]}${C_RESET}"
-    if ! sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${packages[@]}" >/dev/null 2>&1; then
+    if ! sudo apt-get install -y "${packages[@]}" >/dev/null 2>&1; then
         die "Failed to install packages"
     fi
     
@@ -710,7 +787,7 @@ install_nodejs() {
     print_header "Installing Node.js ${NODE_MAJOR}"
     
     # Check if Node.js is already installed with correct version
-    if command -v node >/dev/null 2>&1; then
+    if command_exists node; then
         local current_version
         current_version=$(node --version 2>/dev/null | sed 's/v//' | cut -d. -f1)
         if [[ "$current_version" -ge "$NODE_MAJOR" ]]; then
@@ -742,12 +819,12 @@ install_nodejs() {
     # Install Node.js
     print_step "Installing Node.js (this may take a moment)..."
     sudo apt-get update -y >/dev/null 2>&1
-    if ! sudo DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs >/dev/null 2>&1; then
+    if ! sudo apt-get install -y nodejs >/dev/null 2>&1; then
         die "Failed to install Node.js"
     fi
     
     # Verify installation
-    if ! command -v node >/dev/null 2>&1; then
+    if ! command_exists node; then
         die "Node.js installation failed - node command not found"
     fi
     
@@ -771,7 +848,7 @@ install_serve() {
     fi
     
     # Verify installation
-    if ! command -v serve >/dev/null 2>&1; then
+    if ! command_exists serve; then
         die "serve installation failed - command not found"
     fi
     
@@ -789,7 +866,6 @@ download_bentopdf() {
     
     print_step "Fetching latest release from GitHub..."
     
-    # Fix #2: Handle curl failure properly before command substitution aborts
     local release_info
     if ! release_info=$(curl -fsSL "https://api.github.com/repos/${BENTOPDF_REPO}/releases/latest" 2>&1); then
         die "Failed to fetch release information from GitHub (rate limit/network error?)"
@@ -859,8 +935,7 @@ build_bentopdf() {
     print_step "Building application (this may take several minutes)..."
     print_subheader "Running: SIMPLE_MODE=true npm run build -- --mode production"
     
-    # Build with SIMPLE_MODE (matches community-scripts approach)
-    # This creates a static build optimized for self-hosting
+    # Build with SIMPLE_MODE (creates a static build optimized for self-hosting)
     export SIMPLE_MODE=true
     
     if ! npm run build -- --mode production >>"$LOG_FILE" 2>&1; then
@@ -902,11 +977,11 @@ create_systemd_service() {
     print_step "Creating bentopdf.service..."
     
     # Build the ExecStart command
-    local exec_cmd="/usr/bin/npx serve dist -p ${BENTOPDF_PORT}"
+    local exec_cmd="/usr/bin/npx serve dist -p ${APP_PORT}"
     
     # Add listen address if binding to specific IP
     if [[ "$BENTOPDF_BIND" != "0.0.0.0" ]]; then
-        exec_cmd="/usr/bin/npx serve dist -l tcp://${BENTOPDF_BIND}:${BENTOPDF_PORT}"
+        exec_cmd="/usr/bin/npx serve dist -l tcp://${BENTOPDF_BIND}:${APP_PORT}"
     fi
     
     sudo tee /etc/systemd/system/bentopdf.service > /dev/null << EOF
@@ -942,6 +1017,13 @@ EOF
 configure_firewall() {
     print_header "Configuring Firewall"
     
+    # Skip if env var set
+    if [[ "${SKIP_FIREWALL:-false}" == "true" ]]; then
+        log INFO "Firewall configuration skipped (BENTOPDF_SKIP_UFW=true)"
+        echo
+        return 0
+    fi
+    
     # Skip firewall config if binding to localhost only
     if [[ "$BENTOPDF_BIND" == "127.0.0.1" ]]; then
         log INFO "Binding to localhost only - no firewall changes needed"
@@ -955,7 +1037,7 @@ configure_firewall() {
         log WARN "UFW not available or not functional"
         log INFO "Output: $ufw_status"
         log INFO "Configure firewall on the host instead"
-        log INFO "Required port: ${BENTOPDF_PORT}/tcp"
+        log INFO "Required port: ${APP_PORT}/tcp"
         echo
         return 0
     fi
@@ -972,17 +1054,17 @@ configure_firewall() {
     print_step "Adding firewall rules..."
     
     # Allow BentoPDF port
-    if echo "$ufw_status" | grep -qE "${BENTOPDF_PORT}/tcp.*ALLOW"; then
-        log SUCCESS "Port ${BENTOPDF_PORT}/tcp already allowed"
+    if echo "$ufw_status" | grep -qE "${APP_PORT}/tcp.*ALLOW"; then
+        log SUCCESS "Port ${APP_PORT}/tcp already allowed"
     else
-        if sudo ufw allow "${BENTOPDF_PORT}/tcp" comment "BentoPDF Web UI" >> "$LOG_FILE" 2>&1; then
-            log SUCCESS "Allowed port ${BENTOPDF_PORT}/tcp (BentoPDF Web UI)"
+        if sudo ufw allow "${APP_PORT}/tcp" comment "BentoPDF Web UI" >/dev/null 2>&1; then
+            log SUCCESS "Allowed port ${APP_PORT}/tcp (BentoPDF Web UI)"
         else
-            # Try without comment for older UFW versions
-            if sudo ufw allow "${BENTOPDF_PORT}/tcp" >> "$LOG_FILE" 2>&1; then
-                log SUCCESS "Allowed port ${BENTOPDF_PORT}/tcp"
+            # Fallback: try without comment for older UFW versions
+            if sudo ufw allow "${APP_PORT}/tcp" >/dev/null 2>&1; then
+                log SUCCESS "Allowed port ${APP_PORT}/tcp"
             else
-                log WARN "Failed to add UFW rule for port ${BENTOPDF_PORT}/tcp"
+                log WARN "Failed to add UFW rule for port ${APP_PORT}/tcp"
             fi
         fi
     fi
@@ -1013,7 +1095,7 @@ start_services() {
     # Wait for service to start
     sleep 3
     
-    if systemctl is-active --quiet bentopdf; then
+    if service_is_active bentopdf; then
         print_success "BentoPDF service is running"
     else
         print_warning "Service may not be running correctly"
@@ -1021,15 +1103,17 @@ start_services() {
     fi
     
     # Test HTTP response
-    print_step "Testing HTTP response..."
-    sleep 2
-    
-    local test_url="http://localhost:${BENTOPDF_PORT}"
-    if curl -fsSL "$test_url" >/dev/null 2>&1; then
-        print_success "BentoPDF responding on port ${BENTOPDF_PORT}"
-    else
-        print_warning "BentoPDF not responding yet (may need more time)"
-        print_info "Check logs: journalctl -u bentopdf -f"
+    if command_exists curl; then
+        print_step "Testing HTTP response..."
+        sleep 2
+        
+        local test_url="http://localhost:${APP_PORT}"
+        if curl -fsSL "$test_url" >/dev/null 2>&1; then
+            print_success "BentoPDF responding on port ${APP_PORT}"
+        else
+            print_warning "BentoPDF not responding yet (may need more time)"
+            print_info "Check logs: journalctl -u bentopdf -f"
+        fi
     fi
     
     log SUCCESS "Services started"
@@ -1037,44 +1121,46 @@ start_services() {
 }
 
 #############################################################################
-# Show Summary                                                              #
+# Installation Summary                                                      #
 #############################################################################
 
 show_summary() {
+    local ip_address
+    ip_address=$(get_local_ip)
+    
     echo
     draw_box "Installation Complete"
     
     echo
     print_header "Access Information"
     if [[ "$BENTOPDF_BIND" == "127.0.0.1" ]]; then
-        print_kv "BentoPDF URL" "http://localhost:${BENTOPDF_PORT} (local only)"
+        print_kv "URL" "http://localhost:${APP_PORT} (local only)"
         print_warning "Bound to localhost - use a reverse proxy for external access"
     else
-        print_kv "BentoPDF URL" "http://${LOCAL_IP}:${BENTOPDF_PORT}"
+        print_kv "URL" "http://${ip_address}:${APP_PORT}"
     fi
     print_kv "Install Directory" "$INSTALL_DIR"
-    print_kv "Service" "bentopdf.service"
     
     echo
     print_header "Management Commands"
     printf "  %b\n" "${C_DIM}# Check status${C_RESET}"
-    printf "  %b\n" "${C_CYAN}sudo systemctl status bentopdf${C_RESET}"
+    printf "  %b\n" "${C_CYAN}./${SCRIPT_NAME}.sh --status${C_RESET}"
     echo
     printf "  %b\n" "${C_DIM}# View logs${C_RESET}"
-    printf "  %b\n" "${C_CYAN}sudo journalctl -u bentopdf -f${C_RESET}"
+    printf "  %b\n" "${C_CYAN}./${SCRIPT_NAME}.sh --logs${C_RESET}"
+    echo
+    printf "  %b\n" "${C_DIM}# Reconfigure${C_RESET}"
+    printf "  %b\n" "${C_CYAN}./${SCRIPT_NAME}.sh --configure${C_RESET}"
     echo
     printf "  %b\n" "${C_DIM}# Restart service${C_RESET}"
     printf "  %b\n" "${C_CYAN}sudo systemctl restart bentopdf${C_RESET}"
     echo
-    printf "  %b\n" "${C_DIM}# Stop service${C_RESET}"
-    printf "  %b\n" "${C_CYAN}sudo systemctl stop bentopdf${C_RESET}"
+    printf "  %b\n" "${C_DIM}# Uninstall${C_RESET}"
+    printf "  %b\n" "${C_CYAN}./${SCRIPT_NAME}.sh --uninstall${C_RESET}"
     
     echo
-    print_header "Reinstall / Update"
-    printf "  %b\n" "${C_CYAN}sudo ./bentopdf.sh --force${C_RESET}"
-    
-    echo
-    print_header "Log File"
+    print_header "File Locations"
+    print_kv "Application" "$INSTALL_DIR"
     print_kv "Installation Log" "$LOG_FILE"
     
     echo
@@ -1085,26 +1171,153 @@ show_summary() {
 }
 
 #############################################################################
-# Handle Force Reinstall                                                    #
+# Post-Install Commands                                                     #
 #############################################################################
 
-handle_force_reinstall() {
-    print_header "Removing Existing Installation"
+cmd_status() {
+    print_header "BentoPDF Status"
     
-    print_step "Stopping BentoPDF service..."
+    local ip_address
+    ip_address=$(get_local_ip)
+    
+    if [[ -d "$INSTALL_DIR" ]]; then
+        print_kv "Installed" "yes"
+    else
+        print_kv "Installed" "no"
+        return
+    fi
+    
+    print_kv "Service Status" "$(systemctl is-active bentopdf 2>/dev/null || echo 'unknown')"
+    print_kv "Enabled" "$(systemctl is-enabled bentopdf 2>/dev/null || echo 'unknown')"
+    
+    if command_exists node; then
+        print_kv "Node.js" "$(node --version 2>/dev/null || echo 'unknown')"
+    fi
+    
+    echo
+    print_header "Access Information"
+    print_kv "URL" "http://${ip_address}:${APP_PORT}"
+    print_kv "Install Directory" "$INSTALL_DIR"
+    
+    echo
+}
+
+cmd_logs() {
+    local lines="${1:-50}"
+    
+    print_header "BentoPDF Logs (last $lines lines)"
+    echo
+    
+    # For systemd service
+    sudo journalctl -u bentopdf -n "$lines" --no-pager
+}
+
+cmd_configure() {
+    # Verify sudo access
+    if ! sudo -v 2>/dev/null; then
+        die "This operation requires sudo privileges"
+    fi
+    
+    print_header "Reconfigure BentoPDF"
+    
+    print_warning "This will regenerate the systemd service and restart BentoPDF."
+    print_info "Current configuration:"
+    print_kv "Port" "$APP_PORT"
+    print_kv "Bind Address" "$BENTOPDF_BIND"
+    
+    if ! is_silent; then
+        echo
+        while true; do
+            echo -n "${C_BOLD}${C_CYAN}Continue? ${C_RESET}${C_DIM}(yes/no)${C_RESET} "
+            read -r choice
+            choice=$(echo "$choice" | tr '[:upper:]' '[:lower:]')
+            
+            case "$choice" in
+                yes|y) break ;;
+                no|n)
+                    print_info "Reconfiguration cancelled"
+                    exit 0
+                    ;;
+                *) print_error "Invalid input. Please enter 'yes' or 'no'" ;;
+            esac
+        done
+    fi
+    
+    # Regenerate systemd service with current env vars
+    create_systemd_service
+    
+    # Restart service
+    print_step "Restarting BentoPDF service..."
+    if sudo systemctl restart bentopdf; then
+        sleep 2
+        if service_is_active bentopdf; then
+            log SUCCESS "BentoPDF reconfigured and running"
+        else
+            print_warning "Service may not be running correctly after restart"
+        fi
+    else
+        print_error "Failed to restart BentoPDF"
+    fi
+    
+    echo
+}
+
+cmd_uninstall() {
+    # Verify sudo access
+    if ! sudo -v 2>/dev/null; then
+        die "This operation requires sudo privileges"
+    fi
+    
+    print_header "Uninstall BentoPDF"
+    
+    if ! check_previous_installation; then
+        print_info "BentoPDF is not installed"
+        exit 0
+    fi
+    
+    print_warning "This will remove:"
+    print_subheader "Application directory ($INSTALL_DIR)"
+    print_subheader "Systemd service (bentopdf.service)"
+    
+    if ! is_silent; then
+        echo
+        while true; do
+            echo -n "${C_BOLD}${C_RED}Are you sure? ${C_RESET}${C_DIM}(yes/no)${C_RESET} "
+            read -r choice
+            choice=$(echo "$choice" | tr '[:upper:]' '[:lower:]')
+            
+            case "$choice" in
+                yes|y) break ;;
+                no|n)
+                    print_info "Uninstall cancelled"
+                    exit 0
+                    ;;
+                *) print_error "Invalid input. Please enter 'yes' or 'no'" ;;
+            esac
+        done
+    fi
+    
+    # Stop and disable service
+    print_step "Stopping service..."
     sudo systemctl stop bentopdf 2>/dev/null || true
     sudo systemctl disable bentopdf 2>/dev/null || true
     
+    # Remove service file
     print_step "Removing systemd service..."
     sudo rm -f /etc/systemd/system/bentopdf.service
     sudo systemctl daemon-reload
-    print_success "Removed service file"
     
+    # Remove application directory
     print_step "Removing application directory..."
     sudo rm -rf "$INSTALL_DIR"
-    print_success "Removed: $INSTALL_DIR"
     
-    log INFO "Existing installation removed (--force)"
+    # Remove firewall rules (only if UFW active)
+    if sudo ufw status 2>/dev/null | grep -q "Status: active"; then
+        print_step "Removing firewall rules..."
+        sudo ufw delete allow "${APP_PORT}/tcp" 2>/dev/null || true
+    fi
+    
+    log SUCCESS "BentoPDF has been removed"
     echo
 }
 
@@ -1113,7 +1326,19 @@ handle_force_reinstall() {
 #############################################################################
 
 main() {
-    # Early check: Verify sudo is available before we do anything
+    # Handle post-install commands
+    case "${1:-}" in
+        --status)     cmd_status; exit 0 ;;
+        --logs)       cmd_logs "${2:-50}"; exit 0 ;;
+        --configure)  cmd_configure; exit 0 ;;
+        --uninstall)  cmd_uninstall; exit 0 ;;
+        --version|-v) echo "${SCRIPT_NAME}.sh v${SCRIPT_VERSION}"; exit 0 ;;
+        --force|-f)   FORCE_INSTALL=true ;;
+        "")           ;;  # Continue with installation
+        *)            die "Unknown option: $1 (use --help for usage)" ;;
+    esac
+    
+    # Early sudo check (before logging)
     if ! command -v sudo >/dev/null 2>&1; then
         echo "ERROR: sudo is not installed or not in PATH" >&2
         echo "This script requires sudo. Please install it first:" >&2
@@ -1121,26 +1346,36 @@ main() {
         exit 1
     fi
     
-    # Validate configuration early (Fix #7)
+    if [[ ${EUID} -eq 0 ]]; then
+        echo "ERROR: This script must NOT be run as root!" >&2
+        echo "Run as a regular user with sudo privileges:" >&2
+        echo "  ./$(basename "$0")" >&2
+        exit 1
+    fi
+    
+    if ! sudo -v 2>/dev/null; then
+        echo "ERROR: Current user $(whoami) does not have sudo privileges" >&2
+        echo "Please add user to sudo group:" >&2
+        echo "  usermod -aG sudo $(whoami)" >&2
+        echo "Then logout and login again" >&2
+        exit 1
+    fi
+    
+    # Validate configuration early
     validate_configuration
     
-    # Detect network info early (needed for display)
+    # Detect network info (needed for display)
     detect_network_info
     
-    # Check for previous installation
+    # Check if already installed (idempotency)
     if check_previous_installation; then
         if [[ "$FORCE_INSTALL" == true ]]; then
-            # Fix #3: Confirm BEFORE deleting anything
             clear
             draw_box "BentoPDF Reinstall (--force)"
             echo
+            setup_logging
             preflight_checks
-            init_logging
-            
-            # Get confirmation before destructive action
             confirm_force_reinstall
-            
-            # Now safe to remove
             handle_force_reinstall
         else
             # Show management menu and exit
@@ -1148,10 +1383,10 @@ main() {
             exit 0
         fi
     else
-        # Fresh installation - consolidated intro screen
+        # Fresh installation
         show_intro
+        setup_logging
         preflight_checks
-        init_logging
     fi
     
     # Show what will be installed and get confirmation
@@ -1172,5 +1407,4 @@ main() {
     show_summary
 }
 
-# Run main function
 main "$@"

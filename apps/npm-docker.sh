@@ -65,6 +65,10 @@ UNATTENDED_UPGRADES_WAS_ACTIVE=false
 # Get the directory where this script is located
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Logging
+readonly LOG_DIR="/var/log/lab"
+readonly LOG_FILE="${LOG_DIR}/npm-docker-$(date +%Y%m%d-%H%M%S).log"
+
 #############################################################################
 # Terminal Formatting (embedded from formatting.sh)                         #
 #############################################################################
@@ -203,7 +207,14 @@ log() {
     local level="$1"
     shift
     local message="$*"
+    local timestamp=$(date +"%Y-%m-%d %H:%M:%S")
     
+    # Write plain text to log file (strip ANSI color codes)
+    if [[ -n "${LOG_FILE:-}" ]] && [[ -w "${LOG_FILE:-}" || -w "$(dirname "${LOG_FILE:-/tmp}")" ]]; then
+        echo "[$timestamp] [$level] $message" | sed 's/\x1b\[[0-9;]*m//g' >> "$LOG_FILE" 2>/dev/null || true
+    fi
+    
+    # Display to console with formatting
     case "$level" in
         SUCCESS) print_success "$message" ;;
         ERROR)   print_error "$message" ;;
@@ -215,7 +226,7 @@ log() {
 }
 
 die() {
-    print_error "$@"
+    log ERROR "$@"
     exit 1
 }
 
@@ -231,6 +242,27 @@ readonly SECRETS_DIR="$WORK_DIR/.secrets"
 readonly DEFAULT_TZ="Europe/Berlin"
 readonly MIN_PORT=49152
 readonly MAX_PORT=65535
+
+#############################################################################
+# Setup Logging                                                             #
+#############################################################################
+
+setup_logging() {
+    # Create log directory with sudo
+    if [[ ! -d "$LOG_DIR" ]]; then
+        sudo mkdir -p "$LOG_DIR" 2>/dev/null || true
+    fi
+    
+    # Create log file and set ownership to current user
+    sudo touch "$LOG_FILE" 2>/dev/null || true
+    sudo chown "$(whoami):$(id -gn)" "$LOG_FILE" 2>/dev/null || true
+    sudo chmod 644 "$LOG_FILE" 2>/dev/null || true
+    
+    log INFO "=== NPM Docker Installation Started ==="
+    log INFO "Version: $SCRIPT_VERSION"
+    log INFO "User: $(whoami)"
+    log INFO "Date: $(date)"
+}
 
 #############################################################################
 # Pre-flight Checks                                                         #
@@ -808,98 +840,70 @@ EOF
 # Configure Firewall                                                        #
 #############################################################################
 
-# Helper: Add UFW rule with comment (fallback to without comment if unsupported)
-ufw_allow_with_comment() {
-    local port="$1"
-    local comment="$2"
-    
-    # Try with comment first (UFW 0.35+)
-    if sudo ufw allow "${port}" comment "${comment}" >/dev/null 2>&1; then
-        return 0
-    fi
-    
-    # Fallback: try without comment (older UFW versions)
-    if sudo ufw allow "${port}" >/dev/null 2>&1; then
-        return 0
-    fi
-    
-    return 1
-}
-
 configure_firewall() {
     print_header "Configuring Firewall"
     
-    # Check if UFW command is available
-    if ! command -v ufw >/dev/null 2>&1; then
-        print_warning "UFW not installed, skipping firewall configuration"
-        print_info "Install UFW: sudo apt install ufw"
+    # Test if UFW is available and functional
+    local ufw_status
+    if ! ufw_status=$(sudo ufw status 2>&1); then
+        log WARN "UFW not available or not functional"
+        log INFO "Output: $ufw_status"
+        log INFO "Configure firewall on the host instead"
+        log INFO "Required ports: 80/tcp, 443/tcp, ${ADMIN_PORT}/tcp"
         echo
-        return
-    fi
-    
-    # Test if UFW is functional (may fail in unprivileged containers)
-    # This catches permission issues before we try to modify rules
-    if ! sudo ufw status >/dev/null 2>&1; then
-        print_warning "UFW not functional (possibly running in unprivileged container)"
-        print_info "Configure firewall on the Proxmox host instead"
-        echo
-        return
+        return 0
     fi
     
     # Check if UFW is active
-    local ufw_status
-    ufw_status=$(sudo ufw status 2>/dev/null)
-    
     if ! echo "$ufw_status" | grep -q "Status: active"; then
-        print_warning "UFW is installed but not active"
-        print_info "Enable with: sudo ufw enable"
-        print_info "Then add rules for ports 80, 443, and ${ADMIN_PORT}"
+        log INFO "UFW is not active - skipping firewall configuration"
+        log INFO "To enable UFW manually: sudo ufw enable"
         echo
-        return
+        return 0
     fi
     
-    print_success "UFW is active"
+    log SUCCESS "UFW is active"
     print_step "Adding firewall rules for NPM..."
     
-    # Allow HTTP (port 80)
-    if echo "$ufw_status" | grep -qE "80/tcp.*ALLOW"; then
-        print_success "Port 80/tcp already allowed"
-    else
-        if ufw_allow_with_comment "80/tcp" "NPM HTTP"; then
-            print_success "Allowed port 80/tcp (NPM HTTP)"
-        else
-            print_warning "Failed to add rule for port 80/tcp"
+    # Helper: Add UFW rule with comment (fallback to without comment if unsupported)
+    add_ufw_rule() {
+        local port="$1"
+        local comment="$2"
+        
+        if echo "$ufw_status" | grep -qE "${port}.*ALLOW"; then
+            log SUCCESS "Port ${port} already allowed"
+            return 0
         fi
-    fi
+        
+        if sudo ufw allow "$port" comment "$comment" >> "$LOG_FILE" 2>&1; then
+            log SUCCESS "Allowed ${port} ($comment)"
+            return 0
+        fi
+        
+        if sudo ufw allow "$port" >> "$LOG_FILE" 2>&1; then
+            log SUCCESS "Allowed ${port}"
+            return 0
+        fi
+        
+        log WARN "Failed to add rule for ${port}"
+        return 1
+    }
+    
+    # Allow HTTP (port 80)
+    add_ufw_rule "80/tcp" "NPM HTTP"
     
     # Allow HTTPS (port 443)
-    if echo "$ufw_status" | grep -qE "443/tcp.*ALLOW"; then
-        print_success "Port 443/tcp already allowed"
-    else
-        if ufw_allow_with_comment "443/tcp" "NPM HTTPS"; then
-            print_success "Allowed port 443/tcp (NPM HTTPS)"
-        else
-            print_warning "Failed to add rule for port 443/tcp"
-        fi
-    fi
+    add_ufw_rule "443/tcp" "NPM HTTPS"
     
     # Allow admin port (user-defined)
-    if echo "$ufw_status" | grep -qE "${ADMIN_PORT}/tcp.*ALLOW"; then
-        print_success "Port ${ADMIN_PORT}/tcp already allowed"
-    else
-        if ufw_allow_with_comment "${ADMIN_PORT}/tcp" "NPM Admin UI"; then
-            print_success "Allowed port ${ADMIN_PORT}/tcp (NPM Admin UI)"
-        else
-            print_warning "Failed to add rule for port ${ADMIN_PORT}/tcp"
-        fi
-    fi
+    add_ufw_rule "${ADMIN_PORT}/tcp" "NPM Admin UI"
     
     # Reload UFW to apply changes
-    print_step "Reloading firewall..."
-    if sudo ufw reload >/dev/null 2>&1; then
-        print_success "Firewall rules applied and reloaded"
+    log STEP "Reloading firewall..."
+    if sudo ufw reload >> "$LOG_FILE" 2>&1; then
+        log SUCCESS "Firewall rules applied and reloaded"
     else
-        print_warning "UFW reload failed (rules may still be active)"
+        log WARN "UFW reload failed (rules may still be active)"
     fi
     
     # Show current relevant rules
@@ -908,6 +912,8 @@ configure_firewall() {
     sudo ufw status | grep -E "(80|443|${ADMIN_PORT})/tcp" | while read -r line; do
         print_subheader "$line"
     done
+    
+    log SUCCESS "Firewall configuration complete"
     echo
 }
 
@@ -1029,28 +1035,37 @@ show_summary() {
     print_kv "Environment" "$WORK_DIR/.env"
     print_kv "Secrets" "$SECRETS_DIR/"
     print_kv "SSL Certificates" "$WORK_DIR/letsencrypt/"
+    print_kv "Installation Log" "$LOG_FILE"
     
     echo
     draw_separator
     echo
+    
+    log INFO "=== NPM Docker Installation Completed ==="
 }
-
-#############################################################################
-# Main Execution                                                            #
-#############################################################################
 
 #############################################################################
 # Cleanup / Restore Services                                                #
 #############################################################################
 
 cleanup() {
+    local exit_code=$?
+    
     # Restart unattended-upgrades if we stopped it
     if [[ "$UNATTENDED_UPGRADES_WAS_ACTIVE" == true ]]; then
         if sudo systemctl start unattended-upgrades 2>/dev/null; then
             print_info "Restarted unattended-upgrades service"
         fi
     fi
+    
+    if [[ $exit_code -ne 0 ]]; then
+        log ERROR "Installation failed - check log: $LOG_FILE"
+    fi
+    
+    exit $exit_code
 }
+
+trap cleanup EXIT INT TERM
 
 #############################################################################
 # Main Execution                                                            #
@@ -1092,10 +1107,13 @@ main() {
         echo
         print_info "To reinstall, first remove the existing installation:"
         printf "  %b\n" "${C_CYAN}cd ~ && sudo docker compose -f ~/npm/docker-compose.yml down 2>/dev/null; sudo rm -rf ~/npm${C_RESET}"
-        printf "  %b\n" "${C_CYAN}./npm.sh${C_RESET}"
+        printf "  %b\n" "${C_CYAN}./npm-docker.sh${C_RESET}"
         echo
         exit 0
     fi
+    
+    # Setup logging
+    setup_logging
     
     # Run installation steps
     preflight_checks
@@ -1109,9 +1127,6 @@ main() {
     configure_firewall
     start_docker_compose
     show_summary
-    
-    # Restore any services we stopped
-    cleanup
 }
 
 # Run main function

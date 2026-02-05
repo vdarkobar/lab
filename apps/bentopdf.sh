@@ -1,5 +1,5 @@
 #!/bin/bash
-readonly SCRIPT_VERSION="3.0.0"
+readonly SCRIPT_VERSION="3.1.0"
 readonly SCRIPT_NAME="bentopdf"
 
 # Handle --help early (before defining functions)
@@ -129,6 +129,16 @@ else
     readonly SYMBOL_INFO="i"
     readonly SYMBOL_ARROW=">"
     readonly SYMBOL_BULLET="*"
+fi
+
+#############################################################################
+# Spinner Characters (optional - only needed if run_with_spinner is used)  #
+#############################################################################
+
+if [[ "${LANG:-}" =~ UTF-8 ]] || [[ "${LC_ALL:-}" =~ UTF-8 ]]; then
+    readonly SPINNER_CHARS='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+else
+    readonly SPINNER_CHARS='|/-\'
 fi
 
 #############################################################################
@@ -301,6 +311,71 @@ get_local_ip() {
     [[ -z "$ip_address" ]] && ip_address=$(hostname -I 2>/dev/null | awk '{print $1}')
     ip_address=${ip_address:-"localhost"}
     echo "$ip_address"
+}
+
+#############################################################################
+# Spinner for Long Operations (optional)                                    #
+#############################################################################
+
+# Run a command with an animated spinner, elapsed timer, and log capture.
+# All command output is redirected to LOG_FILE. Console shows a spinner
+# that resolves to ✓/✗ on completion with elapsed time.
+#
+# Usage:
+#   if ! run_with_spinner "Installing packages" sudo apt-get install -y pkg; then
+#       die "Failed to install packages"
+#   fi
+#
+# Notes:
+#   - Command runs in a background subshell (trap ERR does not fire for it)
+#   - Safe with set -e: uses 'wait || exit_code=$?' to prevent errexit from
+#     killing the function before cleanup (temp file removal, log capture)
+#   - Exit code is preserved and returned to caller
+#   - Falls back to running without spinner if mktemp fails
+
+run_with_spinner() {
+    local msg="$1"
+    shift
+    local pid tmp_out exit_code=0
+    local spin_idx=0 start_ts now_ts elapsed
+
+    tmp_out="$(mktemp)" || { log WARN "mktemp failed, running without spinner"; "$@"; return $?; }
+    start_ts="$(date +%s)"
+
+    log STEP "$msg" 2>/dev/null || true
+
+    # Run command in background, capture all output
+    "$@" >"$tmp_out" 2>&1 &
+    pid=$!
+
+    # Show spinner while command runs
+    printf "  %s " "$msg"
+    while kill -0 "$pid" 2>/dev/null; do
+        now_ts="$(date +%s)"
+        elapsed=$((now_ts - start_ts))
+        printf "\r  %s %s (%ds)" "$msg" "${SPINNER_CHARS:spin_idx++%${#SPINNER_CHARS}:1}" "$elapsed"
+        sleep 0.1
+    done
+
+    # Capture exit code (|| prevents set -e from killing before cleanup)
+    wait "$pid" || exit_code=$?
+
+    # Append command output to log file
+    if [[ -n "${LOG_FILE:-}" ]] && [[ -w "${LOG_FILE:-}" ]]; then
+        cat "$tmp_out" >> "$LOG_FILE" 2>/dev/null || true
+    fi
+    rm -f "$tmp_out"
+
+    # Show result with elapsed time
+    now_ts="$(date +%s)"
+    elapsed=$((now_ts - start_ts))
+    if [[ $exit_code -eq 0 ]]; then
+        printf "\r  %s %s (%ds)\n" "$msg" "${C_GREEN}${SYMBOL_SUCCESS}${C_RESET}" "$elapsed"
+    else
+        printf "\r  %s %s (%ds)\n" "$msg" "${C_RED}${SYMBOL_ERROR}${C_RESET}" "$elapsed"
+    fi
+
+    return $exit_code
 }
 
 #############################################################################
@@ -751,11 +826,9 @@ install_base_packages() {
     prepare_apt
     
     # Update package lists
-    print_step "Updating package repositories..."
-    if ! sudo apt-get update -y >/dev/null 2>&1; then
+    if ! run_with_spinner "Updating package repositories" sudo apt-get update -y; then
         die "Failed to update package repositories"
     fi
-    print_success "Package lists updated"
     
     local packages=(
         build-essential
@@ -769,9 +842,8 @@ install_base_packages() {
         python3
     )
     
-    print_step "Installing packages..."
     print_subheader "${C_DIM}${packages[*]}${C_RESET}"
-    if ! sudo apt-get install -y "${packages[@]}" >/dev/null 2>&1; then
+    if ! run_with_spinner "Installing base packages" sudo apt-get install -y "${packages[@]}"; then
         die "Failed to install packages"
     fi
     
@@ -817,9 +889,11 @@ install_nodejs() {
     print_success "Repository configured"
     
     # Install Node.js
-    print_step "Installing Node.js (this may take a moment)..."
-    sudo apt-get update -y >/dev/null 2>&1
-    if ! sudo apt-get install -y nodejs >/dev/null 2>&1; then
+    if ! run_with_spinner "Updating package lists" sudo apt-get update -y; then
+        die "Failed to update package lists after adding NodeSource"
+    fi
+    
+    if ! run_with_spinner "Installing Node.js ${NODE_MAJOR}" sudo apt-get install -y nodejs; then
         die "Failed to install Node.js"
     fi
     
@@ -842,8 +916,7 @@ install_nodejs() {
 install_serve() {
     print_header "Installing Static File Server"
     
-    print_step "Installing 'serve' package globally..."
-    if ! sudo npm install -g serve >>"$LOG_FILE" 2>&1; then
+    if ! run_with_spinner "Installing 'serve' package globally" sudo npm install -g serve; then
         die "Failed to install serve package"
     fi
     
@@ -886,15 +959,13 @@ download_bentopdf() {
     
     print_success "Found version: ${version}"
     
-    print_step "Downloading source tarball..."
-    
     # Create install directory
     sudo mkdir -p "$INSTALL_DIR"
     sudo chown "$(whoami):$(id -gn)" "$INSTALL_DIR"
     
-    # Download and extract
+    # Download tarball
     local tmp_tarball="/tmp/bentopdf-${version}.tar.gz"
-    if ! curl -fsSL "$tarball_url" -o "$tmp_tarball"; then
+    if ! run_with_spinner "Downloading source tarball" curl -fsSL "$tarball_url" -o "$tmp_tarball"; then
         die "Failed to download tarball"
     fi
     print_success "Downloaded: $(du -h "$tmp_tarball" | cut -f1)"
@@ -923,24 +994,17 @@ build_bentopdf() {
     
     cd "$INSTALL_DIR"
     
-    print_step "Installing npm dependencies (this may take several minutes)..."
-    print_subheader "Running: npm ci --no-audit --no-fund"
-    
-    if ! npm ci --no-audit --no-fund >>"$LOG_FILE" 2>&1; then
-        print_error "npm ci failed - check log: $LOG_FILE"
+    if ! run_with_spinner "Installing npm dependencies" npm ci --no-audit --no-fund; then
+        print_info "Hint: Check log for details: $LOG_FILE"
         die "Failed to install npm dependencies"
     fi
-    print_success "Dependencies installed"
-    
-    print_step "Building application (this may take several minutes)..."
-    print_subheader "Running: SIMPLE_MODE=true npm run build -- --mode production"
     
     # Build with SIMPLE_MODE (creates a static build optimized for self-hosting)
     export SIMPLE_MODE=true
     
-    if ! npm run build -- --mode production >>"$LOG_FILE" 2>&1; then
-        print_error "Build failed - check log: $LOG_FILE"
+    if ! run_with_spinner "Building application (production)" npm run build -- --mode production; then
         print_info "Hint: Check if you have enough memory (recommend 2GB+ free)"
+        print_info "Log: $LOG_FILE"
         die "Failed to build BentoPDF"
     fi
     

@@ -863,55 +863,52 @@ configure_firewall() {
     fi
     
     log SUCCESS "UFW is active"
-    print_step "Adding firewall rules for NPM..."
-    
-    # Helper: Add UFW rule with comment (fallback to without comment if unsupported)
-    add_ufw_rule() {
-        local port="$1"
-        local comment="$2"
-        
-        if echo "$ufw_status" | grep -qE "${port}.*ALLOW"; then
-            log SUCCESS "Port ${port} already allowed"
-            return 0
-        fi
-        
-        if sudo ufw allow "$port" comment "$comment" >> "$LOG_FILE" 2>&1; then
-            log SUCCESS "Allowed ${port} ($comment)"
-            return 0
-        fi
-        
-        if sudo ufw allow "$port" >> "$LOG_FILE" 2>&1; then
-            log SUCCESS "Allowed ${port}"
-            return 0
-        fi
-        
-        log WARN "Failed to add rule for ${port}"
-        return 1
-    }
+    print_step "Adding firewall rules..."
     
     # Allow HTTP (port 80)
-    add_ufw_rule "80/tcp" "NPM HTTP"
-    
-    # Allow HTTPS (port 443)
-    add_ufw_rule "443/tcp" "NPM HTTPS"
-    
-    # Allow admin port (user-defined)
-    add_ufw_rule "${ADMIN_PORT}/tcp" "NPM Admin UI"
-    
-    # Reload UFW to apply changes
-    log STEP "Reloading firewall..."
-    if sudo ufw reload >> "$LOG_FILE" 2>&1; then
-        log SUCCESS "Firewall rules applied and reloaded"
+    if echo "$ufw_status" | grep -qE "80/tcp.*ALLOW"; then
+        log SUCCESS "Port 80/tcp already allowed"
     else
-        log WARN "UFW reload failed (rules may still be active)"
+        if sudo ufw allow 80/tcp comment "NPM HTTP" >/dev/null 2>&1; then
+            log SUCCESS "Allowed port 80/tcp (NPM HTTP)"
+        else
+            if sudo ufw allow 80/tcp >/dev/null 2>&1; then
+                log SUCCESS "Allowed port 80/tcp"
+            else
+                log WARN "Failed to add UFW rule for port 80/tcp"
+            fi
+        fi
     fi
     
-    # Show current relevant rules
-    echo
-    print_step "Current NPM-related firewall rules:"
-    sudo ufw status | grep -E "(80|443|${ADMIN_PORT})/tcp" | while read -r line; do
-        print_subheader "$line"
-    done
+    # Allow HTTPS (port 443)
+    if echo "$ufw_status" | grep -qE "443/tcp.*ALLOW"; then
+        log SUCCESS "Port 443/tcp already allowed"
+    else
+        if sudo ufw allow 443/tcp comment "NPM HTTPS" >/dev/null 2>&1; then
+            log SUCCESS "Allowed port 443/tcp (NPM HTTPS)"
+        else
+            if sudo ufw allow 443/tcp >/dev/null 2>&1; then
+                log SUCCESS "Allowed port 443/tcp"
+            else
+                log WARN "Failed to add UFW rule for port 443/tcp"
+            fi
+        fi
+    fi
+    
+    # Allow admin port (user-defined)
+    if echo "$ufw_status" | grep -qE "${ADMIN_PORT}/tcp.*ALLOW"; then
+        log SUCCESS "Port ${ADMIN_PORT}/tcp already allowed"
+    else
+        if sudo ufw allow "${ADMIN_PORT}/tcp" comment "NPM Admin UI" >/dev/null 2>&1; then
+            log SUCCESS "Allowed port ${ADMIN_PORT}/tcp (NPM Admin UI)"
+        else
+            if sudo ufw allow "${ADMIN_PORT}/tcp" >/dev/null 2>&1; then
+                log SUCCESS "Allowed port ${ADMIN_PORT}/tcp"
+            else
+                log WARN "Failed to add UFW rule for port ${ADMIN_PORT}/tcp"
+            fi
+        fi
+    fi
     
     log SUCCESS "Firewall configuration complete"
     echo

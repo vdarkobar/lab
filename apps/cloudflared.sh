@@ -766,49 +766,52 @@ configure_ufw() {
     
     # Skip if requested
     if [[ "$CLOUDFLARED_SKIP_UFW" == "true" ]]; then
-        print_info "Skipping UFW configuration (CLOUDFLARED_SKIP_UFW=true)"
+        log INFO "Skipping UFW configuration (CLOUDFLARED_SKIP_UFW=true)"
         echo
         return 0
     fi
     
-    # Check if UFW is available
-    if ! command_exists ufw; then
-        print_info "UFW not installed - skipping firewall configuration"
-        echo
-        return 0
-    fi
-    
-    # Test if UFW is functional (may fail in unprivileged containers)
-    if ! sudo ufw status >/dev/null 2>&1; then
-        print_warning "UFW not functional in this environment"
-        print_info "Configure firewall on the host instead"
+    # Test if UFW is available and functional
+    local ufw_status
+    if ! ufw_status=$(sudo ufw status verbose 2>&1); then
+        log WARN "UFW not available or not functional"
+        log INFO "Output: $ufw_status"
+        log INFO "Configure firewall on the host instead"
         echo
         return 0
     fi
     
     # Check if UFW is active
-    local ufw_status
-    ufw_status=$(sudo ufw status 2>/dev/null || echo "inactive")
-    
     if ! echo "$ufw_status" | grep -q "Status: active"; then
-        print_info "UFW is not active - skipping firewall configuration"
+        log INFO "UFW is not active - skipping firewall configuration"
+        log INFO "To enable UFW manually: sudo ufw enable"
         echo
         return 0
     fi
     
-    print_success "UFW is active"
-    print_info "Cloudflared uses outbound connections only - no inbound rules needed"
+    log SUCCESS "UFW is active"
+    log INFO "Cloudflared uses outbound connections only - no inbound rules needed"
     
     # Check if outbound is blocked (rare, but possible)
-    if sudo ufw status verbose 2>/dev/null | grep -q "deny (outgoing)"; then
-        print_step "Adding outbound rules for cloudflared..."
-        sudo ufw allow out 443/tcp comment "Cloudflared HTTPS" >>"$LOG_FILE" 2>&1 || true
-        sudo ufw allow out 7844/udp comment "Cloudflared QUIC" >>"$LOG_FILE" 2>&1 || true
-        log SUCCESS "Outbound firewall rules added"
+    if echo "$ufw_status" | grep -q "deny (outgoing)"; then
+        log STEP "Adding outbound rules for cloudflared..."
+        
+        if sudo ufw allow out 443/tcp comment "Cloudflared HTTPS" >> "$LOG_FILE" 2>&1; then
+            log SUCCESS "Allowed outbound 443/tcp (Cloudflared HTTPS)"
+        else
+            log WARN "Failed to add outbound rule for 443/tcp"
+        fi
+        
+        if sudo ufw allow out 7844/udp comment "Cloudflared QUIC" >> "$LOG_FILE" 2>&1; then
+            log SUCCESS "Allowed outbound 7844/udp (Cloudflared QUIC)"
+        else
+            log WARN "Failed to add outbound rule for 7844/udp"
+        fi
     else
-        print_success "Default outbound policy allows cloudflared traffic"
+        log SUCCESS "Default outbound policy allows cloudflared traffic"
     fi
     
+    log SUCCESS "Firewall configuration complete"
     echo
 }
 

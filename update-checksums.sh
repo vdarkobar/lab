@@ -25,13 +25,12 @@ case "${1:-}" in
         echo "  - sha256sum must be available"
         echo
         echo "What it does:"
-        echo "  - Scans lib/, server/, pve/, apps/ directories"
+        echo "  - Scans server/, pve/, apps/ directories"
         echo "  - Generates SHA256 checksums for all .sh files"
         echo "  - Creates/updates CHECKSUMS.txt"
         echo "  - Creates/updates bootstrap.sh.sha256"
         echo
         echo "Directory structure expected:"
-        echo "  lib/        Library scripts"
         echo "  server/     Server deployment scripts"
         echo "  pve/        Proxmox VE scripts"
         echo "  apps/       Application installation scripts"
@@ -93,12 +92,12 @@ set -uo pipefail
 # Check if terminal supports colors
 if [[ -t 1 ]] && command -v tput >/dev/null 2>&1 && tput setaf 1 >/dev/null 2>&1; then
     COLORS_SUPPORTED=true
-    
+
     # Colors
     readonly C_RESET=$(tput sgr0)
     readonly C_BOLD=$(tput bold)
     readonly C_DIM=$(tput dim)
-    
+
     # Foreground colors
     readonly C_RED=$(tput setaf 1)
     readonly C_GREEN=$(tput setaf 2)
@@ -106,7 +105,7 @@ if [[ -t 1 ]] && command -v tput >/dev/null 2>&1 && tput setaf 1 >/dev/null 2>&1
     readonly C_BLUE=$(tput setaf 4)
     readonly C_CYAN=$(tput setaf 6)
     readonly C_WHITE=$(tput setaf 7)
-    
+
     # Bright colors (if supported)
     readonly C_BRIGHT_GREEN=$(tput setaf 10 2>/dev/null || tput setaf 2)
     readonly C_BRIGHT_RED=$(tput setaf 9 2>/dev/null || tput setaf 1)
@@ -200,7 +199,7 @@ draw_box() {
     local text="$1"
     local width=68
     local padding=$(( (width - ${#text} - 2) / 2 ))
-    
+
     echo "${C_CYAN}"
     echo "╔$(printf '═%.0s' $(seq 1 $width))╗"
     printf "║%*s%s%*s║\n" $padding "" "$text" $padding ""
@@ -228,7 +227,7 @@ die() {
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Directories to scan (relative to script location)
-readonly SCAN_DIRS=("lib" "server" "pve" "apps")
+readonly SCAN_DIRS=("server" "pve" "apps")
 
 # Output files
 readonly CHECKSUMS_FILE="CHECKSUMS.txt"
@@ -252,7 +251,7 @@ short_checksum() {
 count_files() {
     local dir="$1"
     local pattern="${2:-*.sh}"
-    
+
     if [[ -d "$dir" ]]; then
         find "$dir" -maxdepth 1 -name "$pattern" -type f 2>/dev/null | wc -l
     else
@@ -266,13 +265,13 @@ count_files() {
 
 preflight_checks() {
     print_header "Pre-flight Checks"
-    
+
     # Check sha256sum is available
     if ! command_exists sha256sum; then
         die "sha256sum not found. Please install coreutils."
     fi
     print_success "sha256sum available"
-    
+
     # Check we're in a valid repository structure
     local found_dirs=0
     for dir in "${SCAN_DIRS[@]}"; do
@@ -280,12 +279,12 @@ preflight_checks() {
             ((found_dirs++))
         fi
     done
-    
+
     if [[ $found_dirs -eq 0 ]]; then
         die "No script directories found. Run from lab repository root."
     fi
     print_success "Repository structure validated ($found_dirs directories found)"
-    
+
     # Show what we found
     for dir in "${SCAN_DIRS[@]}"; do
         local count
@@ -294,7 +293,7 @@ preflight_checks() {
             print_subheader "$dir/: $count scripts"
         fi
     done
-    
+
     if [[ -f "$SCRIPT_DIR/bootstrap.sh" ]]; then
         print_subheader "bootstrap.sh: present"
     fi
@@ -308,7 +307,7 @@ generate_checksums() {
     local output_file="$1"
     local script_count=0
     local failed_count=0
-    
+
     # Write header
     cat > "$output_file" << EOF
 # Lab Components Checksums
@@ -316,39 +315,38 @@ generate_checksums() {
 # Algorithm: SHA256
 #
 # Format: checksum  filepath
-# 
+#
 # Verify with: sha256sum -c CHECKSUMS.txt
 
 EOF
-    
+
     # Process each directory
     for dir in "${SCAN_DIRS[@]}"; do
         local dir_path="$SCRIPT_DIR/$dir"
-        
+
         if [[ ! -d "$dir_path" ]]; then
             continue
         fi
-        
+
         # Get section name from directory
         local section_name
         case "$dir" in
-            lib)    section_name="Libraries" ;;
             server) section_name="Server Scripts" ;;
             pve)    section_name="PVE Scripts" ;;
             apps)   section_name="Application Scripts" ;;
             *)      section_name="$dir" ;;
         esac
-        
+
         print_header "Processing $dir/"
         echo "# $section_name" >> "$output_file"
-        
+
         # Process scripts in directory
         shopt -s nullglob
         local dir_count=0
         for script in "$dir_path"/*.sh; do
             if [[ -f "$script" ]]; then
                 local relative_path="${script#$SCRIPT_DIR/}"
-                
+
                 if sha256sum "$script" 2>/dev/null | sed "s|$SCRIPT_DIR/||" >> "$output_file"; then
                     local checksum
                     checksum=$(sha256sum "$script" 2>/dev/null | awk '{print $1}')
@@ -363,14 +361,14 @@ EOF
             fi
         done
         shopt -u nullglob
-        
+
         if [[ $dir_count -eq 0 ]]; then
             print_info "No scripts found in $dir/"
         fi
-        
+
         echo >> "$output_file"
     done
-    
+
     # Return counts via global variables (bash doesn't support multiple returns)
     TOTAL_SCRIPTS=$script_count
     FAILED_SCRIPTS=$failed_count
@@ -383,14 +381,14 @@ EOF
 generate_bootstrap_checksum() {
     local bootstrap_path="$SCRIPT_DIR/bootstrap.sh"
     local checksum_file="$SCRIPT_DIR/$BOOTSTRAP_CHECKSUM"
-    
+
     if [[ ! -f "$bootstrap_path" ]]; then
         print_warning "bootstrap.sh not found, skipping dedicated checksum"
         return 1
     fi
-    
+
     print_header "Processing bootstrap.sh"
-    
+
     if sha256sum "$bootstrap_path" 2>/dev/null | sed "s|$SCRIPT_DIR/||" > "$checksum_file"; then
         local checksum
         checksum=$(awk '{print $1}' "$checksum_file")
@@ -410,39 +408,39 @@ generate_bootstrap_checksum() {
 
 verify_checksums() {
     local checksums_path="$SCRIPT_DIR/$CHECKSUMS_FILE"
-    
+
     if [[ ! -f "$checksums_path" ]]; then
         die "CHECKSUMS.txt not found. Run without --verify first."
     fi
-    
+
     print_header "Verifying Checksums"
-    
+
     local pass_count=0
     local fail_count=0
     local skip_count=0
-    
+
     # Change to script directory for relative paths
     cd "$SCRIPT_DIR"
-    
+
     # Read and verify each checksum
     while IFS= read -r line; do
         # Skip comments and empty lines
         [[ "$line" =~ ^#.*$ ]] && continue
         [[ -z "${line// }" ]] && continue
-        
+
         local checksum filepath
         checksum=$(echo "$line" | awk '{print $1}')
         filepath=$(echo "$line" | awk '{print $2}')
-        
+
         if [[ ! -f "$filepath" ]]; then
             print_warning "Missing: $filepath"
             ((skip_count++))
             continue
         fi
-        
+
         local current_checksum
         current_checksum=$(sha256sum "$filepath" 2>/dev/null | awk '{print $1}')
-        
+
         if [[ "$checksum" == "$current_checksum" ]]; then
             print_success "$filepath"
             ((pass_count++))
@@ -453,7 +451,7 @@ verify_checksums() {
             ((fail_count++))
         fi
     done < "$checksums_path"
-    
+
     # Summary
     echo
     draw_separator
@@ -461,7 +459,7 @@ verify_checksums() {
     print_kv "Failed" "$fail_count"
     print_kv "Missing" "$skip_count"
     draw_separator
-    
+
     if [[ $fail_count -gt 0 ]]; then
         echo
         print_error "Checksum verification FAILED"
@@ -485,16 +483,16 @@ verify_checksums() {
 show_summary() {
     local mode="$1"
     local output_file="$2"
-    
+
     echo
     draw_separator
     print_kv "Scripts processed" "$TOTAL_SCRIPTS"
-    
+
     if [[ $FAILED_SCRIPTS -gt 0 ]]; then
         print_kv "Failed" "$FAILED_SCRIPTS"
     fi
     draw_separator
-    
+
     if [[ "$mode" == "dry-run" ]]; then
         echo
         print_warning "Dry-run mode: No files were modified"
@@ -529,10 +527,10 @@ show_summary() {
 
 show_intro() {
     local mode="$1"
-    
+
     clear
     draw_box "Checksum Generator v${SCRIPT_VERSION}"
-    
+
     echo
     print_kv "Working directory" "$SCRIPT_DIR"
     print_kv "Mode" "$mode"
@@ -546,7 +544,7 @@ show_intro() {
 main() {
     local mode="update"
     local output_file="$SCRIPT_DIR/$CHECKSUMS_FILE"
-    
+
     # Parse arguments
     case "${1:-}" in
         --dry-run|-n)
@@ -567,28 +565,28 @@ main() {
             die "Unknown option: $1 (use --help for usage)"
             ;;
     esac
-    
+
     # Handle verify mode separately
     if [[ "$mode" == "verify" ]]; then
         show_intro "verify"
         verify_checksums
         exit $?
     fi
-    
+
     # Show introduction
     show_intro "$mode"
-    
+
     # Pre-flight checks
     preflight_checks
-    
+
     # Generate checksums
     generate_checksums "$output_file"
-    
+
     # Generate bootstrap checksum (only in update mode)
     if [[ "$mode" == "update" ]]; then
         generate_bootstrap_checksum || true
     fi
-    
+
     # Show summary
     show_summary "$mode" "$output_file"
 }

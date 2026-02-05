@@ -4,7 +4,7 @@
 # Cloudflare Tunnel Installer - Debian 13                                         #
 ###################################################################################
 
-readonly SCRIPT_VERSION="2.0.0"
+readonly SCRIPT_VERSION="2.1.0"
 
 # Handle --help flag early (before defining functions)
 case "${1:-}" in
@@ -44,7 +44,7 @@ case "${1:-}" in
         echo "Files created:"
         echo "  /etc/cloudflared/                       Configuration directory"
         echo "  /etc/apt/sources.list.d/cloudflared.list  APT repository"
-        echo "  /usr/share/keyrings/cloudflare-main.gpg   GPG key"
+        echo "  /usr/share/keyrings/cloudflare-public-v2.gpg  GPG key"
         echo "  /var/log/lab/cloudflared-*.log            Installation log"
         echo
         echo "Getting your tunnel token:"
@@ -66,7 +66,7 @@ esac
 ###################################################################################
 #                                                                                 #
 # DESCRIPTION:                                                                    #
-#   Installs Cloudflare Tunnel (cloudflared) daemon and configures it to run     #
+#   Installs Cloudflare Tunnel (cloudflared) daemon and configures it to run      #
 #   as a systemd service. Supports both interactive and automated installation.   #
 #                                                                                 #
 # LOCATION: lab/apps/cloudflared.sh                                               #
@@ -81,8 +81,8 @@ esac
 #   ./cloudflared.sh                                                              #
 #                                                                                 #
 # INCORRECT USAGE:                                                                #
-#   sudo ./cloudflared.sh  ← DO NOT DO THIS                                       #
-#   # ./cloudflared.sh     ← DO NOT DO THIS                                       #
+#   sudo ./cloudflared.sh  ← DO NOT DO THIS                                      #
+#   # ./cloudflared.sh     ← DO NOT DO THIS                                      #
 #                                                                                 #
 # REQUIREMENTS:                                                                   #
 #   - Debian 13 (Trixie) or Debian 12 (Bookworm)                                 #
@@ -90,12 +90,17 @@ esac
 #   - Internet connection                                                         #
 #   - Cloudflare account with tunnel token                                        #
 #                                                                                 #
-# VERSION: 2.0.0                                                                  #
+# VERSION: 2.1.0                                                                  #
 # LICENSE: MIT                                                                    #
 #                                                                                 #
 ###################################################################################
 
-set -euo pipefail  # Exit on error, undefined vars, pipe failures
+set -euo pipefail
+
+export DEBIAN_FRONTEND=noninteractive
+
+# Secure file creation (tunnel tokens handled)
+umask 077
 
 # Track services we stop (to restart on cleanup)
 UNATTENDED_UPGRADES_WAS_ACTIVE=false
@@ -106,6 +111,11 @@ UNATTENDED_UPGRADES_WAS_ACTIVE=false
 
 readonly SCRIPT_NAME="cloudflared"
 
+# App config (env overrides)
+CLOUDFLARED_TUNNEL_TOKEN="${CLOUDFLARED_TUNNEL_TOKEN:-}";  TUNNEL_TOKEN="$CLOUDFLARED_TUNNEL_TOKEN"
+CLOUDFLARED_SKIP_UFW="${CLOUDFLARED_SKIP_UFW:-false}";     SKIP_FIREWALL="$CLOUDFLARED_SKIP_UFW"
+CLOUDFLARED_SILENT="${CLOUDFLARED_SILENT:-false}";          SILENT="$CLOUDFLARED_SILENT"
+
 # Logging
 readonly LOG_DIR="/var/log/lab"
 readonly LOG_FILE="${LOG_DIR}/${SCRIPT_NAME}-$(date +%Y%m%d-%H%M%S).log"
@@ -115,14 +125,6 @@ readonly CLOUDFLARED_BIN="/usr/bin/cloudflared"
 readonly CLOUDFLARED_CONFIG_DIR="/etc/cloudflared"
 readonly CLOUDFLARED_SERVICE="cloudflared"
 
-# Environment variable defaults (can be overridden)
-CLOUDFLARED_TUNNEL_TOKEN="${CLOUDFLARED_TUNNEL_TOKEN:-}"
-CLOUDFLARED_SKIP_UFW="${CLOUDFLARED_SKIP_UFW:-false}"
-CLOUDFLARED_SILENT="${CLOUDFLARED_SILENT:-false}"
-
-# Export for non-interactive apt
-export DEBIAN_FRONTEND=noninteractive
-
 ###################################################################################
 # Terminal Formatting (embedded - no external dependency)                         #
 ###################################################################################
@@ -131,12 +133,10 @@ export DEBIAN_FRONTEND=noninteractive
 if [[ -t 1 ]] && command -v tput >/dev/null 2>&1 && tput setaf 1 >/dev/null 2>&1; then
     COLORS_SUPPORTED=true
     
-    # Colors
     readonly C_RESET=$(tput sgr0)
     readonly C_BOLD=$(tput bold)
     readonly C_DIM=$(tput dim)
     
-    # Foreground colors
     readonly C_RED=$(tput setaf 1)
     readonly C_GREEN=$(tput setaf 2)
     readonly C_YELLOW=$(tput setaf 3)
@@ -144,7 +144,6 @@ if [[ -t 1 ]] && command -v tput >/dev/null 2>&1 && tput setaf 1 >/dev/null 2>&1
     readonly C_CYAN=$(tput setaf 6)
     readonly C_WHITE=$(tput setaf 7)
     
-    # Bright colors (if supported)
     readonly C_BRIGHT_GREEN=$(tput setaf 10 2>/dev/null || tput setaf 2)
     readonly C_BRIGHT_RED=$(tput setaf 9 2>/dev/null || tput setaf 1)
     readonly C_BRIGHT_YELLOW=$(tput setaf 11 2>/dev/null || tput setaf 3)
@@ -181,6 +180,16 @@ else
     readonly SYMBOL_INFO="i"
     readonly SYMBOL_ARROW=">"
     readonly SYMBOL_BULLET="*"
+fi
+
+###################################################################################
+# Spinner Characters (optional - only needed if run_with_spinner is used)         #
+###################################################################################
+
+if [[ "${LANG:-}" =~ UTF-8 ]] || [[ "${LC_ALL:-}" =~ UTF-8 ]]; then
+    readonly SPINNER_CHARS='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+else
+    readonly SPINNER_CHARS='|/-\'
 fi
 
 ###################################################################################
@@ -254,16 +263,16 @@ draw_separator() {
 ###################################################################################
 
 log() {
-    local level="$1"
-    shift
+    local level="$1"; shift
     local message="$*"
-    local timestamp=$(date +"%Y-%m-%d %H:%M:%S")
-    
+    local timestamp
+    timestamp=$(date +"%Y-%m-%d %H:%M:%S")
+
     # Write plain text to log file (strip ANSI color codes)
     if [[ -n "${LOG_FILE:-}" ]] && [[ -w "${LOG_FILE:-}" || -w "$(dirname "${LOG_FILE:-/tmp}")" ]]; then
         echo "[$timestamp] [$level] $message" | sed 's/\x1b\[[0-9;]*m//g' >> "$LOG_FILE" 2>/dev/null || true
     fi
-    
+
     # Display to console with formatting
     case "$level" in
         SUCCESS) print_success "$message" ;;
@@ -276,24 +285,90 @@ log() {
 }
 
 die() {
-    log ERROR "$@"
+    local msg="$*"
+    log ERROR "$msg"
     exit 1
 }
 
-# Error trap for better debugging
-trap 'print_error "Error on line $LINENO: $BASH_COMMAND"' ERR
+# Error trap for better debugging (set after print_error is defined)
+trap 'print_error "Error at line $LINENO: $BASH_COMMAND"; log ERROR "Error at line $LINENO: $BASH_COMMAND"' ERR
 
 ###################################################################################
-# Cleanup Handler                                                                 #
+# Spinner for Long Operations (optional)                                          #
+###################################################################################
+
+# Run a command with an animated spinner, elapsed timer, and log capture.
+# All command output is redirected to LOG_FILE. Console shows a spinner
+# that resolves to ✓/✗ on completion with elapsed time.
+#
+# Usage:
+#   if ! run_with_spinner "Installing packages" sudo apt-get install -y pkg; then
+#       die "Failed to install packages"
+#   fi
+#
+# Notes:
+#   - Command runs in a background subshell (trap ERR does not fire for it)
+#   - Safe with set -e: uses 'wait || exit_code=$?' to prevent errexit from
+#     killing the function before cleanup (temp file removal, log capture)
+#   - Exit code is preserved and returned to caller
+#   - Falls back to running without spinner if mktemp fails
+
+run_with_spinner() {
+    local msg="$1"
+    shift
+    local pid tmp_out exit_code=0
+    local spin_idx=0 start_ts now_ts elapsed
+
+    tmp_out="$(mktemp)" || { log WARN "mktemp failed, running without spinner"; "$@"; return $?; }
+    start_ts="$(date +%s)"
+
+    log STEP "$msg" 2>/dev/null || true
+
+    # Run command in background, capture all output
+    "$@" >"$tmp_out" 2>&1 &
+    pid=$!
+
+    # Show spinner while command runs
+    printf "  %s " "$msg"
+    while kill -0 "$pid" 2>/dev/null; do
+        now_ts="$(date +%s)"
+        elapsed=$((now_ts - start_ts))
+        printf "\r  %s %s (%ds)" "$msg" "${SPINNER_CHARS:spin_idx++%${#SPINNER_CHARS}:1}" "$elapsed"
+        sleep 0.1
+    done
+
+    # Capture exit code (|| prevents set -e from killing before cleanup)
+    wait "$pid" || exit_code=$?
+
+    # Append command output to log file
+    if [[ -n "${LOG_FILE:-}" ]] && [[ -w "${LOG_FILE:-}" ]]; then
+        cat "$tmp_out" >> "$LOG_FILE" 2>/dev/null || true
+    fi
+    rm -f "$tmp_out"
+
+    # Show result with elapsed time
+    now_ts="$(date +%s)"
+    elapsed=$((now_ts - start_ts))
+    if [[ $exit_code -eq 0 ]]; then
+        printf "\r  %s %s (%ds)\n" "$msg" "${C_GREEN}${SYMBOL_SUCCESS}${C_RESET}" "$elapsed"
+    else
+        printf "\r  %s %s (%ds)\n" "$msg" "${C_RED}${SYMBOL_ERROR}${C_RESET}" "$elapsed"
+    fi
+
+    return $exit_code
+}
+
+###################################################################################
+# Cleanup / Restore Services                                                      #
 ###################################################################################
 
 cleanup() {
     local exit_code=$?
     
-    # Restore unattended-upgrades if we stopped it
+    # Restart unattended-upgrades if we stopped it
     if [[ "$UNATTENDED_UPGRADES_WAS_ACTIVE" == true ]]; then
         if sudo systemctl start unattended-upgrades 2>/dev/null; then
-            print_info "Restored unattended-upgrades service"
+            print_info "Restarted unattended-upgrades service"
         fi
     fi
     
@@ -311,7 +386,7 @@ trap cleanup EXIT INT TERM
 ###################################################################################
 
 is_silent() {
-    [[ "$CLOUDFLARED_SILENT" == "true" ]]
+    [[ "${SILENT:-false}" == "true" ]]
 }
 
 command_exists() {
@@ -326,11 +401,10 @@ service_is_enabled() {
     systemctl is-enabled --quiet "$1" 2>/dev/null
 }
 
+# Uses ip route first, hostname -I as fallback
 get_local_ip() {
-    # Better IP detection: use ip route to find the interface that reaches the internet
     local ip_address
     ip_address=$(ip route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}')
-    # Fallback to hostname -I if ip route fails
     [[ -z "$ip_address" ]] && ip_address=$(hostname -I 2>/dev/null | awk '{print $1}')
     ip_address=${ip_address:-"localhost"}
     echo "$ip_address"
@@ -341,17 +415,19 @@ get_local_ip() {
 ###################################################################################
 
 setup_logging() {
+    # Note: sudo existence check should be done BEFORE calling this function
+    
     # Create log directory with sudo
     if [[ ! -d "$LOG_DIR" ]]; then
         sudo mkdir -p "$LOG_DIR" 2>/dev/null || true
     fi
-    
+
     # Create log file and set ownership to current user
     sudo touch "$LOG_FILE" 2>/dev/null || true
     sudo chown "$(whoami):$(id -gn)" "$LOG_FILE" 2>/dev/null || true
     sudo chmod 644 "$LOG_FILE" 2>/dev/null || true
-    
-    log INFO "=== Cloudflared Installation Started ==="
+
+    log INFO "=== ${SCRIPT_NAME} Started ==="
     log INFO "Version: $SCRIPT_VERSION"
     log INFO "User: $(whoami)"
     log INFO "Date: $(date)"
@@ -363,7 +439,7 @@ setup_logging() {
 
 preflight_checks() {
     print_header "Pre-flight Checks"
-    
+
     # CRITICAL: Enforce non-root execution
     if [[ ${EUID} -eq 0 ]]; then
         echo
@@ -377,89 +453,89 @@ preflight_checks() {
         die "Execution blocked: Running as root user"
     fi
     print_success "Running as non-root user: ${C_BOLD}$(whoami)${C_RESET}"
-    
-    # Verify sudo access
+
+    # sudo must exist on minimal images
+    if ! command -v sudo >/dev/null 2>&1; then
+        echo
+        print_error "sudo is not installed. This script requires sudo."
+        echo
+        print_info "Fix (run as root):"
+        echo "  apt-get update && apt-get install -y sudo"
+        echo "  usermod -aG sudo $(whoami)"
+        echo "  # then logout/login"
+        echo
+        die "Execution blocked: sudo not installed"
+    fi
+
+    # Verify sudo access (may prompt)
     if ! sudo -v 2>/dev/null; then
         echo
         print_error "User $(whoami) does not have sudo privileges"
         echo
-        print_info "To grant sudo access, run as root:"
+        print_info "To grant sudo access (run as root):"
         echo "  ${C_CYAN}usermod -aG sudo $(whoami)${C_RESET}"
-        echo "  ${C_CYAN}# Then logout and login again${C_RESET}"
+        echo "  ${C_CYAN}# then logout/login${C_RESET}"
         echo
         die "Execution blocked: No sudo privileges"
     fi
     print_success "Sudo privileges confirmed"
-    
-    # Test sudo authentication
-    if ! sudo -n true 2>/dev/null; then
-        print_info "Sudo authentication required"
-        if ! sudo -v; then
-            die "Sudo authentication failed"
-        fi
-    fi
-    print_success "Sudo authentication successful"
-    
+
     # Check if running on PVE host (should not be)
     if [[ -f /etc/pve/.version ]] || command_exists pveversion; then
-        die "This script should not run on Proxmox VE host. Run inside a VM or LXC container."
+        die "This script must not run on the Proxmox VE host. Run inside a VM or LXC container."
     fi
     print_success "Not running on Proxmox host"
-    
-    # Check for systemd
+
+    # Check for systemd (required)
     if ! command_exists systemctl; then
         die "systemd not found (is this container systemd-enabled?)"
     fi
     print_success "systemd available"
-    
-    # Check Debian version
+
+    # Check OS (warn if not Debian)
     if [[ -f /etc/os-release ]]; then
         . /etc/os-release
-        if [[ "$ID" != "debian" ]]; then
-            print_warning "This script is designed for Debian. Detected: $ID"
+        if [[ "${ID:-}" != "debian" ]]; then
+            print_warning "Designed for Debian. Detected: ${ID:-unknown}"
         else
-            print_success "Debian system detected: ${VERSION:-unknown}"
+            print_success "Debian detected: ${VERSION:-unknown}"
         fi
     else
-        print_warning "Cannot determine OS version"
+        print_warning "Cannot determine OS version (/etc/os-release missing)"
     fi
-    
-    # Check internet connectivity (try multiple methods for minimal systems)
-    # Use pkg.cloudflare.com as it's the actual repo we need
+
+    # Check internet connectivity (multiple methods for minimal systems)
     print_step "Testing internet connectivity..."
     local internet_ok=false
-    
-    # Method 1: curl (if available)
+
     if command_exists curl; then
-        if curl -s --max-time 5 --head https://pkg.cloudflare.com >/dev/null 2>&1; then
+        if curl -s --max-time 5 --head https://deb.debian.org >/dev/null 2>&1; then
             print_success "Internet connectivity verified (curl)"
             internet_ok=true
         fi
     fi
-    
-    # Method 2: wget (if available and curl failed)
+
     if [[ "$internet_ok" == false ]] && command_exists wget; then
-        if wget -q --timeout=5 --spider https://pkg.cloudflare.com 2>/dev/null; then
+        if wget -q --timeout=5 --spider https://deb.debian.org 2>/dev/null; then
             print_success "Internet connectivity verified (wget)"
             internet_ok=true
         fi
     fi
-    
-    # Method 3: Bash /dev/tcp (built-in, no external tools needed)
+
     if [[ "$internet_ok" == false ]]; then
-        if (echo >/dev/tcp/pkg.cloudflare.com/443) 2>/dev/null; then
-            print_success "Internet connectivity verified (tcp)"
+        # Bash built-in TCP check (no external tools)
+        if timeout 5 bash -c 'cat < /dev/null > /dev/tcp/deb.debian.org/80' 2>/dev/null; then
+            print_success "Internet connectivity verified (dev/tcp)"
             internet_ok=true
         fi
     fi
-    
-    # Method 4: If all methods fail, warn but continue - let apt-get be the real test
+
     if [[ "$internet_ok" == false ]]; then
         print_warning "Could not verify internet with available tools"
-        print_info "Will verify connectivity when installing packages..."
+        print_info "Will verify connectivity during package installation..."
     fi
-    
-    # Check if cloudflared already installed
+
+    # Check if cloudflared already installed (binary exists but service not running)
     if command_exists cloudflared; then
         local current_version
         current_version=$(cloudflared --version 2>/dev/null | head -1 || echo "unknown")
@@ -489,8 +565,35 @@ preflight_checks() {
             done
         fi
     fi
-    
+
     echo
+}
+
+###################################################################################
+# APT Lock Handling                                                               #
+###################################################################################
+
+prepare_apt() {
+    # Stop unattended-upgrades to avoid apt locks (best-effort)
+    if systemctl is-active --quiet unattended-upgrades 2>/dev/null; then
+        UNATTENDED_UPGRADES_WAS_ACTIVE=true
+        sudo systemctl stop unattended-upgrades 2>/dev/null || true
+        print_info "Temporarily stopped unattended-upgrades"
+    fi
+
+    # Wait for dpkg lock (best-effort)
+    local wait_count=0
+    while sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
+        if [[ $wait_count -eq 0 ]]; then
+            print_subheader "Waiting for apt/dpkg lock..."
+        fi
+        wait_count=$((wait_count + 1))
+        sleep 2
+        if [[ $wait_count -ge 60 ]]; then
+            print_warning "Still waiting for apt lock (60s+) — continuing anyway"
+            break
+        fi
+    done
 }
 
 ###################################################################################
@@ -528,33 +631,14 @@ install_dependencies() {
     
     print_step "Installing missing packages: ${missing_packages[*]}"
     
-    # Stop unattended upgrades if running (track state to restart later)
-    if systemctl is-active --quiet unattended-upgrades 2>/dev/null; then
-        UNATTENDED_UPGRADES_WAS_ACTIVE=true
-        sudo systemctl stop unattended-upgrades 2>/dev/null || true
-        print_info "Temporarily stopped unattended-upgrades"
-    fi
+    # Handle apt locks
+    prepare_apt
     
-    # Wait for apt lock
-    local wait_count=0
-    while sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
-        if [[ $wait_count -eq 0 ]]; then
-            print_subheader "Waiting for apt lock to be released..."
-        fi
-        sleep 2
-        ((wait_count++))
-        if [[ $wait_count -gt 30 ]]; then
-            die "Timed out waiting for apt lock"
-        fi
-    done
-    
-    print_subheader "Updating package lists..."
-    if ! sudo apt-get update -y >>"$LOG_FILE" 2>&1; then
+    if ! run_with_spinner "Updating package lists" sudo apt-get update -y; then
         die "apt-get update failed"
     fi
     
-    print_subheader "Installing packages..."
-    if ! sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${missing_packages[@]}" >>"$LOG_FILE" 2>&1; then
+    if ! run_with_spinner "Installing ${missing_packages[*]}" sudo apt-get install -y "${missing_packages[@]}"; then
         die "Failed to install dependencies: ${missing_packages[*]}"
     fi
     
@@ -570,9 +654,9 @@ get_tunnel_token() {
     print_header "Tunnel Token Configuration"
     
     # Check if token provided via environment
-    if [[ -n "$CLOUDFLARED_TUNNEL_TOKEN" ]]; then
+    if [[ -n "$TUNNEL_TOKEN" ]]; then
         print_success "Using tunnel token from environment variable"
-        log INFO "Token provided via CLOUDFLARED_TUNNEL_TOKEN (${#CLOUDFLARED_TUNNEL_TOKEN} chars)"
+        log INFO "Token provided via CLOUDFLARED_TUNNEL_TOKEN (${#TUNNEL_TOKEN} chars)"
         echo
         return 0
     fi
@@ -596,16 +680,18 @@ get_tunnel_token() {
     echo
     
     while true; do
-        echo -n "${C_CYAN}Enter your Cloudflare Tunnel token: ${C_RESET}"
-        read -r CLOUDFLARED_TUNNEL_TOKEN
+        echo
+        print_info "Paste your tunnel token (input hidden for security)"
+        echo -ne "${C_CYAN}Token: ${C_RESET}"
+        read -r TUNNEL_TOKEN
         
-        if [[ -z "$CLOUDFLARED_TUNNEL_TOKEN" ]]; then
+        if [[ -z "$TUNNEL_TOKEN" ]]; then
             print_error "Token cannot be empty"
             continue
         fi
         
         # Basic validation - tokens are base64-encoded JSON, typically start with eyJ
-        if [[ ! "$CLOUDFLARED_TUNNEL_TOKEN" =~ ^eyJ ]]; then
+        if [[ ! "$TUNNEL_TOKEN" =~ ^eyJ ]]; then
             print_warning "Token format looks unusual (should start with 'eyJ')"
             echo -n "${C_CYAN}Continue anyway? ${C_RESET}${C_DIM}(yes/no)${C_RESET} "
             read -r confirm
@@ -616,7 +702,7 @@ get_tunnel_token() {
         
         # Confirm token
         echo
-        print_info "Token received (${#CLOUDFLARED_TUNNEL_TOKEN} characters)"
+        print_info "Token received (${#TUNNEL_TOKEN} characters)"
         echo -n "${C_CYAN}Is this correct? ${C_RESET}${C_DIM}(yes/no)${C_RESET} "
         read -r confirm
         if [[ "$confirm" =~ ^[Yy] ]] || [[ -z "$confirm" ]]; then
@@ -624,7 +710,7 @@ get_tunnel_token() {
         fi
     done
     
-    log INFO "Token configured interactively (${#CLOUDFLARED_TUNNEL_TOKEN} chars)"
+    log INFO "Token configured (${#TUNNEL_TOKEN} chars)"
     echo
 }
 
@@ -674,14 +760,12 @@ install_cloudflared() {
     fi
     
     if [[ "$need_apt_update" == true ]]; then
-        print_subheader "Updating package lists..."
-        if ! sudo apt-get update -y >>"$LOG_FILE" 2>&1; then
+        if ! run_with_spinner "Updating package lists" sudo apt-get update -y; then
             die "apt-get update failed"
         fi
     fi
     
-    print_subheader "Installing/upgrading cloudflared..."
-    if ! sudo DEBIAN_FRONTEND=noninteractive apt-get install -y cloudflared >>"$LOG_FILE" 2>&1; then
+    if ! run_with_spinner "Installing cloudflared" sudo apt-get install -y cloudflared; then
         die "Failed to install cloudflared"
     fi
     
@@ -729,7 +813,7 @@ configure_service() {
     print_step "Installing tunnel service with token..."
     log INFO "Running: cloudflared service install [TOKEN]"
     
-    if ! sudo cloudflared service install "$CLOUDFLARED_TUNNEL_TOKEN" >>"$LOG_FILE" 2>&1; then
+    if ! sudo cloudflared service install "$TUNNEL_TOKEN" >>"$LOG_FILE" 2>&1; then
         die "Failed to install cloudflared service"
     fi
     print_success "Service installed"
@@ -748,6 +832,7 @@ configure_service() {
     
     # Verify service is running
     sleep 3
+    
     if service_is_active "$CLOUDFLARED_SERVICE"; then
         log SUCCESS "Cloudflared service is running"
     else
@@ -758,15 +843,15 @@ configure_service() {
 }
 
 ###################################################################################
-# Configure UFW Firewall                                                          #
+# Configure Firewall                                                              #
 ###################################################################################
 
-configure_ufw() {
+configure_firewall() {
     print_header "Configuring Firewall"
     
     # Skip if requested
-    if [[ "$CLOUDFLARED_SKIP_UFW" == "true" ]]; then
-        log INFO "Skipping UFW configuration (CLOUDFLARED_SKIP_UFW=true)"
+    if [[ "${SKIP_FIREWALL:-false}" == "true" ]]; then
+        log INFO "Firewall configuration skipped (CLOUDFLARED_SKIP_UFW=true)"
         echo
         return 0
     fi
@@ -799,13 +884,21 @@ configure_ufw() {
         if sudo ufw allow out 443/tcp comment "Cloudflared HTTPS" >> "$LOG_FILE" 2>&1; then
             log SUCCESS "Allowed outbound 443/tcp (Cloudflared HTTPS)"
         else
-            log WARN "Failed to add outbound rule for 443/tcp"
+            if sudo ufw allow out 443/tcp >> "$LOG_FILE" 2>&1; then
+                log SUCCESS "Allowed outbound 443/tcp"
+            else
+                log WARN "Failed to add outbound rule for 443/tcp"
+            fi
         fi
         
         if sudo ufw allow out 7844/udp comment "Cloudflared QUIC" >> "$LOG_FILE" 2>&1; then
             log SUCCESS "Allowed outbound 7844/udp (Cloudflared QUIC)"
         else
-            log WARN "Failed to add outbound rule for 7844/udp"
+            if sudo ufw allow out 7844/udp >> "$LOG_FILE" 2>&1; then
+                log SUCCESS "Allowed outbound 7844/udp"
+            else
+                log WARN "Failed to add outbound rule for 7844/udp"
+            fi
         fi
     else
         log SUCCESS "Default outbound policy allows cloudflared traffic"
@@ -820,7 +913,8 @@ configure_ufw() {
 ###################################################################################
 
 show_summary() {
-    local ip=$(get_local_ip)
+    local ip_address
+    ip_address=$(get_local_ip)
     local version
     version=$(cloudflared --version 2>/dev/null | head -1 || echo "unknown")
     
@@ -833,18 +927,16 @@ show_summary() {
     print_kv "Service Status" "$(systemctl is-active $CLOUDFLARED_SERVICE 2>/dev/null || echo 'unknown')"
     print_kv "Config Directory" "$CLOUDFLARED_CONFIG_DIR"
     print_kv "Log File" "$LOG_FILE"
-    print_kv "Server IP" "$ip"
+    print_kv "Server IP" "$ip_address"
     print_kv "Installed By" "$(whoami)"
     
     echo
-    print_header "Useful Commands"
+    print_header "Management Commands"
     printf "  %b\n" "${C_DIM}# View tunnel status${C_RESET}"
     printf "  %b\n" "${C_CYAN}./cloudflared.sh --status${C_RESET}"
     echo
     printf "  %b\n" "${C_DIM}# View service logs${C_RESET}"
     printf "  %b\n" "${C_CYAN}./cloudflared.sh --logs${C_RESET}"
-    printf "  %b\n" "${C_DIM}# Or directly:${C_RESET}"
-    printf "  %b\n" "${C_CYAN}journalctl -u cloudflared -f${C_RESET}"
     echo
     printf "  %b\n" "${C_DIM}# Reconfigure with new token${C_RESET}"
     printf "  %b\n" "${C_CYAN}./cloudflared.sh --configure${C_RESET}"
@@ -861,8 +953,15 @@ show_summary() {
     print_info "Dashboard: ${C_CYAN}https://one.dash.cloudflare.com${C_RESET}"
     
     echo
+    print_header "File Locations"
+    print_kv "Configuration" "$CLOUDFLARED_CONFIG_DIR"
+    print_kv "Installation Log" "$LOG_FILE"
+    
+    echo
     draw_separator
     echo
+    
+    log INFO "=== Cloudflared Installation Completed ==="
 }
 
 ###################################################################################
@@ -902,7 +1001,7 @@ cmd_status() {
     print_header "Configuration"
     
     # Check if using token-based config (token embedded in systemd service file)
-    if systemctl cat cloudflared 2>/dev/null | grep -q -- "--token"; then
+    if sudo systemctl cat cloudflared 2>/dev/null | grep -q -- "--token"; then
         print_success "Token-based configuration"
         print_info "Tunnel routes managed via Cloudflare Zero Trust dashboard"
         print_subheader "Dashboard: https://one.dash.cloudflare.com"
@@ -919,7 +1018,7 @@ cmd_status() {
     # Show recent logs
     echo
     print_header "Recent Activity (last 10 lines)"
-    journalctl -u "$CLOUDFLARED_SERVICE" --no-pager -n 10 2>/dev/null || \
+    sudo journalctl -u "$CLOUDFLARED_SERVICE" --no-pager -n 10 2>/dev/null || \
         echo "  No logs available"
     
     echo
@@ -930,7 +1029,8 @@ cmd_logs() {
     
     print_header "Cloudflared Logs (last $lines lines)"
     echo
-    journalctl -u "$CLOUDFLARED_SERVICE" --no-pager -n "$lines" 2>/dev/null || \
+    
+    sudo journalctl -u "$CLOUDFLARED_SERVICE" -n "$lines" --no-pager 2>/dev/null || \
         die "Unable to retrieve logs"
 }
 
@@ -952,22 +1052,18 @@ cmd_configure() {
             choice=$(echo "$choice" | tr '[:upper:]' '[:lower:]')
             
             case "$choice" in
-                yes|y)
-                    break
-                    ;;
+                yes|y) break ;;
                 no|n)
                     print_info "Reconfiguration cancelled"
                     exit 0
                     ;;
-                *)
-                    print_error "Invalid input. Please enter 'yes' or 'no'"
-                    ;;
+                *) print_error "Invalid input. Please enter 'yes' or 'no'" ;;
             esac
         done
     fi
     
     # Clear existing token to force re-prompt
-    CLOUDFLARED_TUNNEL_TOKEN=""
+    TUNNEL_TOKEN=""
     
     # Get new token and reconfigure
     get_tunnel_token
@@ -984,7 +1080,15 @@ cmd_uninstall() {
     
     print_header "Uninstall Cloudflared"
     
-    print_warning "This will remove cloudflared and all configuration."
+    if ! command_exists cloudflared; then
+        print_info "Cloudflared is not installed"
+        exit 0
+    fi
+    
+    print_warning "This will remove:"
+    print_subheader "Cloudflared package and configuration"
+    print_subheader "Systemd service"
+    print_subheader "APT repository and GPG key"
     
     if ! is_silent; then
         echo
@@ -994,16 +1098,12 @@ cmd_uninstall() {
             choice=$(echo "$choice" | tr '[:upper:]' '[:lower:]')
             
             case "$choice" in
-                yes|y)
-                    break
-                    ;;
+                yes|y) break ;;
                 no|n)
                     print_info "Uninstall cancelled"
                     exit 0
                     ;;
-                *)
-                    print_error "Invalid input. Please enter 'yes' or 'no'"
-                    ;;
+                *) print_error "Invalid input. Please enter 'yes' or 'no'" ;;
             esac
         done
     fi
@@ -1020,9 +1120,13 @@ cmd_uninstall() {
     fi
     
     # Remove package
-    print_step "Removing cloudflared package..."
-    sudo apt-get remove --purge -y cloudflared 2>/dev/null || true
-    sudo apt-get autoremove -y 2>/dev/null || true
+    if ! run_with_spinner "Removing cloudflared package" sudo apt-get remove --purge -y cloudflared; then
+        print_warning "Package removal encountered issues, continuing..."
+    fi
+    
+    if ! run_with_spinner "Cleaning up unused packages" sudo apt-get autoremove -y; then
+        print_warning "Autoremove encountered issues, continuing..."
+    fi
     
     # Clean up configuration
     print_step "Removing configuration files..."
@@ -1032,8 +1136,17 @@ cmd_uninstall() {
     sudo rm -f /usr/share/keyrings/cloudflare-public-v2.gpg
     sudo rm -f /usr/share/keyrings/cloudflare-main.gpg
     
+    # Remove firewall rules (only if UFW active)
+    if sudo ufw status 2>/dev/null | grep -q "Status: active"; then
+        print_step "Removing firewall rules..."
+        sudo ufw delete allow out 443/tcp 2>/dev/null || true
+        sudo ufw delete allow out 7844/udp 2>/dev/null || true
+    fi
+    
     # Update package lists
-    sudo apt-get update -qq 2>/dev/null || true
+    if ! run_with_spinner "Updating package lists" sudo apt-get update -qq; then
+        print_warning "Package list update failed, continuing..."
+    fi
     
     log SUCCESS "Cloudflared has been removed"
     echo
@@ -1083,52 +1196,30 @@ show_intro() {
 ###################################################################################
 
 main() {
-    # Handle post-install commands (these don't need the full pre-flight)
+    # Handle post-install commands
     case "${1:-}" in
-        --status)
-            cmd_status
-            exit 0
-            ;;
-        --logs)
-            cmd_logs "${2:-50}"
-            exit 0
-            ;;
-        --configure)
-            cmd_configure
-            exit 0
-            ;;
-        --uninstall)
-            cmd_uninstall
-            exit 0
-            ;;
-        --version|-v)
-            echo "cloudflared.sh v${SCRIPT_VERSION}"
-            exit 0
-            ;;
-        "")
-            # Continue with installation
-            ;;
-        *)
-            die "Unknown option: $1 (use --help for usage)"
-            ;;
+        --status)    cmd_status; exit 0 ;;
+        --logs)      cmd_logs "${2:-50}"; exit 0 ;;
+        --configure) cmd_configure; exit 0 ;;
+        --uninstall) cmd_uninstall; exit 0 ;;
+        --version|-v) echo "${SCRIPT_NAME}.sh v${SCRIPT_VERSION}"; exit 0 ;;
+        "") ;;  # Continue with installation
+        *) die "Unknown option: $1 (use --help for usage)" ;;
     esac
     
-    # Early check: Verify sudo is available before we do anything
+    # Early sudo check (before logging)
     if ! command -v sudo >/dev/null 2>&1; then
         echo "ERROR: sudo is not installed or not in PATH" >&2
         echo "This script requires sudo. Please install it first:" >&2
         echo "  apt update && apt install sudo" >&2
         exit 1
     fi
-    
-    # Verify user has sudo access before creating log file
     if [[ ${EUID} -eq 0 ]]; then
         echo "ERROR: This script must NOT be run as root!" >&2
         echo "Run as a regular user with sudo privileges:" >&2
         echo "  ./$(basename "$0")" >&2
         exit 1
     fi
-    
     if ! sudo -v 2>/dev/null; then
         echo "ERROR: Current user $(whoami) does not have sudo privileges" >&2
         echo "Please add user to sudo group:" >&2
@@ -1137,7 +1228,7 @@ main() {
         exit 1
     fi
     
-    # Check if cloudflared is already installed and running as a service
+    # Check if already installed (idempotency)
     if command -v cloudflared >/dev/null 2>&1 && systemctl is-active --quiet cloudflared 2>/dev/null; then
         clear
         draw_box "Cloudflare Tunnel - Already Installed"
@@ -1181,19 +1272,14 @@ main() {
         show_intro
     fi
     
-    # Run installation steps
+    # Run installation
     preflight_checks
     install_dependencies
     get_tunnel_token
     install_cloudflared
     configure_service
-    configure_ufw
-    
-    # Show summary
+    configure_firewall
     show_summary
-    
-    log INFO "=== Cloudflared Installation Completed ==="
 }
 
-# Run main function
 main "$@"

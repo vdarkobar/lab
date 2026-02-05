@@ -832,48 +832,35 @@ configure_firewall() {
     print_header "Configuring Firewall"
     
     if [[ "$SKIP_FIREWALL" == "true" ]]; then
-        print_info "Firewall configuration skipped (SAMBA_SKIP_UFW=true)"
+        log INFO "Firewall configuration skipped (SAMBA_SKIP_UFW=true)"
         echo
         return 0
     fi
     
-    # Check if in LXC container
-    if [[ "$IS_LXC" == "true" ]]; then
-        print_warning "LXC container - configure firewall on Proxmox host"
-        print_info "Required ports: TCP 445 (SMB)"
+    # Test if UFW is available and functional
+    local ufw_status
+    if ! ufw_status=$(sudo ufw status 2>&1); then
+        log WARN "UFW not available or not functional"
+        log INFO "Output: $ufw_status"
+        log INFO "Configure firewall on the host instead"
+        log INFO "Required ports: TCP 445 (SMB)"
         if [[ "$ENABLE_NETBIOS" == "true" ]]; then
-            print_info "NetBIOS ports: TCP 139, UDP 137, 138"
+            log INFO "NetBIOS ports: TCP 139, UDP 137, 138"
         fi
         echo
         return 0
     fi
     
-    # Check if UFW command is available
-    if ! command_exists ufw; then
-        print_info "UFW not installed - skipping firewall configuration"
-        echo
-        return 0
-    fi
-    
-    # Test if UFW is functional (may fail in unprivileged containers)
-    if ! sudo ufw status >/dev/null 2>&1; then
-        print_warning "UFW not functional in this environment"
-        print_info "Configure firewall on the host instead"
-        echo
-        return 0
-    fi
-    
     # Check if UFW is active
-    local ufw_status
-    ufw_status=$(sudo ufw status 2>/dev/null)
-    
     if ! echo "$ufw_status" | grep -q "Status: active"; then
-        print_info "UFW not active - skipping firewall configuration"
+        log INFO "UFW is not active - skipping firewall configuration"
+        log INFO "To enable UFW manually: sudo ufw enable"
         echo
         return 0
     fi
     
-    print_success "UFW is active"
+    log SUCCESS "UFW is active"
+    print_step "Adding firewall rules..."
     
     # Helper: Add UFW rule with comment (fallback to without comment if unsupported)
     add_ufw_rule() {
@@ -882,39 +869,37 @@ configure_firewall() {
         
         # Check if rule already exists
         if echo "$ufw_status" | grep -qE "${rule}.*ALLOW"; then
-            print_success "Rule already exists: $rule"
+            log SUCCESS "Rule already exists: $rule"
             return 0
         fi
         
         # Try with comment first (UFW 0.35+)
-        if sudo ufw allow "$rule" comment "$comment" >/dev/null 2>&1; then
-            print_success "Allowed $rule ($comment)"
+        if sudo ufw allow "$rule" comment "$comment" >> "$LOG_FILE" 2>&1; then
+            log SUCCESS "Allowed $rule ($comment)"
             return 0
         fi
         
         # Fallback: try without comment
-        if sudo ufw allow "$rule" >/dev/null 2>&1; then
-            print_success "Allowed $rule"
+        if sudo ufw allow "$rule" >> "$LOG_FILE" 2>&1; then
+            log SUCCESS "Allowed $rule"
             return 0
         fi
         
-        print_warning "Failed to add rule for $rule"
+        log WARN "Failed to add rule for $rule"
         return 1
     }
-    
-    print_step "Adding firewall rules..."
     
     # Allow SMB (port 445)
     add_ufw_rule "445/tcp" "Samba SMB"
     
     if [[ "$ENABLE_NETBIOS" == "true" ]]; then
-        print_step "Adding NetBIOS ports..."
+        log STEP "Adding NetBIOS ports..."
         add_ufw_rule "139/tcp" "Samba NetBIOS"
         add_ufw_rule "137/udp" "Samba NetBIOS"
         add_ufw_rule "138/udp" "Samba NetBIOS"
     fi
     
-    log SUCCESS "Firewall configured"
+    log SUCCESS "Firewall configuration complete"
     echo
 }
 

@@ -48,6 +48,7 @@ case "${1:-}" in
         echo "  --status      Show service status and access info"
         echo "  --logs [N]    Show last N lines of logs (default: 50)"
         echo "  --configure   Run configuration menu (VLANs, static hosts)"
+        echo "                Aliases: --config, -c"
         echo "  --vlans       Configure VLAN access control only"
         echo "  --hosts       Configure static DNS hosts only"
         echo "  --uninstall   Remove Unbound"
@@ -152,6 +153,16 @@ else
     readonly SYMBOL_INFO="i"
     readonly SYMBOL_ARROW=">"
     readonly SYMBOL_BULLET="*"
+fi
+
+#############################################################################
+# Spinner Characters (optional - only needed if run_with_spinner is used)  #
+#############################################################################
+
+if [[ "${LANG:-}" =~ UTF-8 ]] || [[ "${LC_ALL:-}" =~ UTF-8 ]]; then
+    readonly SPINNER_CHARS='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+else
+    readonly SPINNER_CHARS='|/-\'
 fi
 
 #############################################################################
@@ -332,6 +343,108 @@ get_local_ip() {
     [[ -z "$ip_address" ]] && ip_address=$(hostname -I 2>/dev/null | awk '{print $1}')
     ip_address=${ip_address:-"localhost"}
     echo "$ip_address"
+}
+
+#############################################################################
+# Spinner for Long Operations (optional)                                    #
+#############################################################################
+
+# Run a command with an animated spinner, elapsed timer, and log capture.
+# All command output is redirected to LOG_FILE. Console shows a spinner
+# that resolves to ✓/✗ on completion with elapsed time.
+#
+# Usage:
+#   if ! run_with_spinner "Installing packages" sudo apt-get install -y pkg; then
+#       die "Failed to install packages"
+#   fi
+#
+# Notes:
+#   - Command runs in a background subshell (trap ERR does not fire for it)
+#   - Safe with set -e: uses 'wait || exit_code=$?' to prevent errexit from
+#     killing the function before cleanup (temp file removal, log capture)
+#   - Exit code is preserved and returned to caller
+#   - Falls back to running without spinner if mktemp fails
+
+run_with_spinner() {
+    local msg="$1"
+    shift
+    local pid tmp_out exit_code=0
+    local spin_idx=0 start_ts now_ts elapsed
+
+    tmp_out="$(mktemp)" || { log WARN "mktemp failed, running without spinner"; "$@"; return $?; }
+    start_ts="$(date +%s)"
+
+    log STEP "$msg" 2>/dev/null || true
+
+    # Run command in background, capture all output
+    "$@" >"$tmp_out" 2>&1 &
+    pid=$!
+
+    # Show spinner while command runs
+    printf "  %s " "$msg"
+    while kill -0 "$pid" 2>/dev/null; do
+        now_ts="$(date +%s)"
+        elapsed=$((now_ts - start_ts))
+        printf "\r  %s %s (%ds)" "$msg" "${SPINNER_CHARS:spin_idx++%${#SPINNER_CHARS}:1}" "$elapsed"
+        sleep 0.1
+    done
+
+    # Capture exit code (|| prevents set -e from killing before cleanup)
+    wait "$pid" || exit_code=$?
+
+    # Append command output to log file
+    if [[ -n "${LOG_FILE:-}" ]] && [[ -w "${LOG_FILE:-}" ]]; then
+        cat "$tmp_out" >> "$LOG_FILE" 2>/dev/null || true
+    fi
+    rm -f "$tmp_out"
+
+    # Show result with elapsed time
+    now_ts="$(date +%s)"
+    elapsed=$((now_ts - start_ts))
+    if [[ $exit_code -eq 0 ]]; then
+        printf "\r  %s %s (%ds)\n" "$msg" "${C_GREEN}${SYMBOL_SUCCESS}${C_RESET}" "$elapsed"
+    else
+        printf "\r  %s %s (%ds)\n" "$msg" "${C_RED}${SYMBOL_ERROR}${C_RESET}" "$elapsed"
+    fi
+
+    return $exit_code
+}
+
+#############################################################################
+# Port Availability Check                                                   #
+#############################################################################
+
+check_port_availability() {
+    local ports=("$@")
+    local ports_in_use=()
+    
+    print_step "Checking port availability..."
+    
+    if command_exists ss; then
+        for port in "${ports[@]}"; do
+            if ss -tuln 2>/dev/null | grep -q ":${port} "; then
+                ports_in_use+=("$port")
+            fi
+        done
+    elif command_exists netstat; then
+        for port in "${ports[@]}"; do
+            if netstat -tuln 2>/dev/null | grep -q ":${port} "; then
+                ports_in_use+=("$port")
+            fi
+        done
+    else
+        print_warning "Cannot check ports (ss/netstat not available)"
+        return 0
+    fi
+    
+    if [[ ${#ports_in_use[@]} -gt 0 ]]; then
+        print_warning "Ports already in use: ${ports_in_use[*]}"
+        print_info "Ensure these ports are free before starting the service."
+        return 1
+    fi
+    
+    print_success "Required ports are available: ${ports[*]}"
+    return 0
 }
 
 #############################################################################
@@ -529,13 +642,11 @@ install_unbound() {
     else
         prepare_apt
         
-        log STEP "Updating package lists..."
-        if ! sudo apt-get update -y; then
+        if ! run_with_spinner "Updating package lists" sudo apt-get update -y; then
             die "Failed to update package lists"
         fi
         
-        log STEP "Installing unbound package..."
-        if ! sudo apt-get install -y unbound; then
+        if ! run_with_spinner "Installing unbound package" sudo apt-get install -y unbound; then
             die "Failed to install unbound"
         fi
         log SUCCESS "Unbound installed successfully"
@@ -827,11 +938,7 @@ UNBOUND_CONFIG
 update_root_hints() {
     print_header "Updating Root Hints"
     
-    log STEP "Downloading latest root hints from internic.net..."
-    
-    if wget https://www.internic.net/domain/named.root -qO- | sudo tee /usr/share/dns/root.hints >/dev/null; then
-        log SUCCESS "Root hints updated successfully"
-    else
+    if ! run_with_spinner "Downloading root hints from internic.net" bash -c 'wget https://www.internic.net/domain/named.root -qO- | sudo tee /usr/share/dns/root.hints >/dev/null'; then
         log WARN "Failed to update root hints (will use existing)"
     fi
 }
@@ -1275,6 +1382,13 @@ configure_vlans() {
     fi
     
     if [[ -f "$outfile" ]]; then
+        # Config write contract: backup only if changed
+        if cmp -s "$tmp_file" "$outfile"; then
+            log INFO "VLAN configuration unchanged"
+            rm -f "$tmp_file"
+            return 0
+        fi
+        
         echo
         print_warning "File already exists: $outfile"
         echo -ne "${C_CYAN}Overwrite it? (yes/no): ${C_RESET}"
@@ -1285,6 +1399,10 @@ configure_vlans() {
             rm -f "$tmp_file"
             return 0
         fi
+        
+        local backup="${outfile}.backup.$(date +%Y%m%d_%H%M%S)"
+        sudo cp "$outfile" "$backup"
+        log INFO "Config changed - backed up to: $backup"
     fi
     
     sudo install -m 0644 -o root -g root "$tmp_file" "$outfile"
@@ -1572,6 +1690,13 @@ configure_static_hosts() {
     fi
     
     if [[ -f "$outfile" ]]; then
+        # Config write contract: backup only if changed
+        if cmp -s "$tmp_file" "$outfile"; then
+            log INFO "Static hosts configuration unchanged"
+            rm -f "$tmp_file"
+            return 0
+        fi
+        
         echo
         print_warning "File already exists: $outfile"
         echo -ne "${C_CYAN}Overwrite it? (yes/no): ${C_RESET}"
@@ -1582,6 +1707,10 @@ configure_static_hosts() {
             rm -f "$tmp_file"
             return 0
         fi
+        
+        local backup="${outfile}.backup.$(date +%Y%m%d_%H%M%S)"
+        sudo cp "$outfile" "$backup"
+        log INFO "Config changed - backed up to: $backup"
     fi
     
     sudo install -m 0644 -o root -g root "$tmp_file" "$outfile"
@@ -1898,7 +2027,6 @@ main() {
         exit 0
     fi
     
-    clear
     draw_box "Unbound DNS Resolver Installer v${SCRIPT_VERSION}"
     
     # Setup logging
@@ -1907,6 +2035,7 @@ main() {
     # Run all installation steps
     preflight_checks
     detect_domain_name
+    check_port_availability 53 || print_warning "Port 53 conflict detected — installation may fail at service start"
     install_unbound
     create_config
     update_root_hints

@@ -4,14 +4,15 @@
 # Samba File Server Installer                                                     #
 ###################################################################################
 
-readonly SCRIPT_VERSION="4.0.0"
+readonly SCRIPT_VERSION="4.1.0"
+readonly SCRIPT_NAME="samba"
 
 # Handle --help flag early (before defining functions)
 case "${1:-}" in
     --help|-h)
         echo "Samba File Server Installer v${SCRIPT_VERSION}"
         echo
-        echo "Usage: $0 [--help|--status|--logs|--configure|--uninstall]"
+        echo "Usage: $0 [--help|--status|--logs [N]|--configure|--uninstall|--version]"
         echo
         echo "Requirements:"
         echo "  - Must run as NON-ROOT user with sudo privileges"
@@ -40,6 +41,13 @@ case "${1:-}" in
         echo "  --logs [N]    Show last N lines of logs (default: 50)"
         echo "  --configure   Reconfigure share settings"
         echo "  --uninstall   Remove Samba and clean up"
+        echo "  --version     Show script version"
+        echo
+        echo "Network requirements:"
+        echo "  Inbound 445/tcp        SMB file sharing"
+        echo "  Inbound 139/tcp        NetBIOS session (if enabled)"
+        echo "  Inbound 137/udp        NetBIOS name service (if enabled)"
+        echo "  Inbound 138/udp        NetBIOS datagram (if enabled)"
         echo
         echo "Examples:"
         echo "  # Interactive installation"
@@ -64,8 +72,8 @@ esac
 ###################################################################################
 #                                                                                 #
 # DESCRIPTION:                                                                    #
-#   Installs and configures Samba file server with security-hardened settings.   #
-#   Supports both interactive and automated (silent) installation modes.          #
+#   Installs and configures Samba file server with security-hardened settings.     #
+#   Supports both interactive and automated (silent) installation modes.           #
 #                                                                                 #
 # LOCATION: lab/apps/samba.sh                                                     #
 # REPOSITORY: https://github.com/vdarkobar/lab                                    #
@@ -87,12 +95,13 @@ esac
 #   - Sudo privileges                                                             #
 #   - Minimum 100MB disk space                                                    #
 #                                                                                 #
-# VERSION: 4.0.0                                                                  #
+# VERSION: 4.1.0                                                                  #
 # LICENSE: MIT                                                                    #
 #                                                                                 #
 ###################################################################################
 
 set -euo pipefail  # Exit on error, undefined vars, pipe failures
+export DEBIAN_FRONTEND=noninteractive
 
 # Track services we stop (to restart on cleanup)
 UNATTENDED_UPGRADES_WAS_ACTIVE=false
@@ -101,7 +110,17 @@ UNATTENDED_UPGRADES_WAS_ACTIVE=false
 # Script Configuration                                                            #
 ###################################################################################
 
-readonly SCRIPT_NAME="samba"
+# Environment variable defaults (can be overridden)
+SAMBA_SILENT="${SAMBA_SILENT:-false}";         SILENT="$SAMBA_SILENT"
+SAMBA_SKIP_UFW="${SAMBA_SKIP_UFW:-false}";     SKIP_FIREWALL="$SAMBA_SKIP_UFW"
+
+SHARE_NAME="${SAMBA_SHARE_NAME:-}"
+SHARE_PATH="${SAMBA_SHARE_PATH:-}"
+SAMBA_GROUP="${SAMBA_GROUP:-}"
+WORKGROUP="${SAMBA_WORKGROUP:-WORKGROUP}"
+SERVER_NAME="${SAMBA_SERVER_NAME:-FILESERVER}"
+MIN_PROTOCOL="${SAMBA_MIN_PROTOCOL:-SMB3}"
+ENABLE_NETBIOS="${SAMBA_ENABLE_NETBIOS:-false}"
 
 # Logging
 readonly LOG_DIR="/var/log/lab"
@@ -115,21 +134,6 @@ readonly SAMBA_CONF_DIR="/etc/samba"
 readonly SERVER_SIGNING="mandatory"
 readonly SMB_ENCRYPTION="mandatory"
 
-# Environment variable defaults (can be overridden)
-# Using SAMBA_ prefix to avoid conflicts with shell environment
-SHARE_NAME="${SAMBA_SHARE_NAME:-}"
-SHARE_PATH="${SAMBA_SHARE_PATH:-}"
-SAMBA_GROUP="${SAMBA_GROUP:-}"
-WORKGROUP="${SAMBA_WORKGROUP:-WORKGROUP}"
-SERVER_NAME="${SAMBA_SERVER_NAME:-FILESERVER}"
-MIN_PROTOCOL="${SAMBA_MIN_PROTOCOL:-SMB3}"
-ENABLE_NETBIOS="${SAMBA_ENABLE_NETBIOS:-false}"
-SKIP_FIREWALL="${SAMBA_SKIP_UFW:-false}"
-SILENT_MODE="${SAMBA_SILENT:-false}"
-
-# Export for non-interactive apt
-export DEBIAN_FRONTEND=noninteractive
-
 ###################################################################################
 # Terminal Formatting (embedded - no external dependency)                         #
 ###################################################################################
@@ -138,12 +142,10 @@ export DEBIAN_FRONTEND=noninteractive
 if [[ -t 1 ]] && command -v tput >/dev/null 2>&1 && tput setaf 1 >/dev/null 2>&1; then
     COLORS_SUPPORTED=true
     
-    # Colors
     readonly C_RESET=$(tput sgr0)
     readonly C_BOLD=$(tput bold)
     readonly C_DIM=$(tput dim)
     
-    # Foreground colors
     readonly C_RED=$(tput setaf 1)
     readonly C_GREEN=$(tput setaf 2)
     readonly C_YELLOW=$(tput setaf 3)
@@ -151,7 +153,6 @@ if [[ -t 1 ]] && command -v tput >/dev/null 2>&1 && tput setaf 1 >/dev/null 2>&1
     readonly C_CYAN=$(tput setaf 6)
     readonly C_WHITE=$(tput setaf 7)
     
-    # Bright colors (if supported)
     readonly C_BRIGHT_GREEN=$(tput setaf 10 2>/dev/null || tput setaf 2)
     readonly C_BRIGHT_RED=$(tput setaf 9 2>/dev/null || tput setaf 1)
     readonly C_BRIGHT_YELLOW=$(tput setaf 11 2>/dev/null || tput setaf 3)
@@ -188,6 +189,16 @@ else
     readonly SYMBOL_INFO="i"
     readonly SYMBOL_ARROW=">"
     readonly SYMBOL_BULLET="*"
+fi
+
+###################################################################################
+# Spinner Characters (optional - only needed if run_with_spinner is used)         #
+###################################################################################
+
+if [[ "${LANG:-}" =~ UTF-8 ]] || [[ "${LC_ALL:-}" =~ UTF-8 ]]; then
+    readonly SPINNER_CHARS='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+else
+    readonly SPINNER_CHARS='|/-\'
 fi
 
 ###################################################################################
@@ -261,10 +272,10 @@ draw_separator() {
 ###################################################################################
 
 log() {
-    local level="$1"
-    shift
+    local level="$1"; shift
     local message="$*"
-    local timestamp=$(date +"%Y-%m-%d %H:%M:%S")
+    local timestamp
+    timestamp=$(date +"%Y-%m-%d %H:%M:%S")
     
     # Write plain text to log file (strip ANSI color codes)
     if [[ -n "${LOG_FILE:-}" ]] && [[ -w "${LOG_FILE:-}" || -w "$(dirname "${LOG_FILE:-/tmp}")" ]]; then
@@ -283,24 +294,25 @@ log() {
 }
 
 die() {
-    log ERROR "$@"
+    local msg="$*"
+    log ERROR "$msg"
     exit 1
 }
 
-# Error trap for better debugging
-trap 'print_error "Error on line $LINENO: $BASH_COMMAND"' ERR
+# Error trap for better debugging (set after print_error is defined)
+trap 'print_error "Error at line $LINENO: $BASH_COMMAND"; log ERROR "Error at line $LINENO: $BASH_COMMAND"' ERR
 
 ###################################################################################
-# Cleanup Handler                                                                 #
+# Cleanup / Restore Services                                                      #
 ###################################################################################
 
 cleanup() {
     local exit_code=$?
     
-    # Restore unattended-upgrades if we stopped it
+    # Restart unattended-upgrades if we stopped it
     if [[ "$UNATTENDED_UPGRADES_WAS_ACTIVE" == true ]]; then
         if sudo systemctl start unattended-upgrades 2>/dev/null; then
-            print_info "Restored unattended-upgrades service"
+            print_info "Restarted unattended-upgrades service"
         fi
     fi
     
@@ -318,7 +330,7 @@ trap cleanup EXIT INT TERM
 ###################################################################################
 
 is_silent() {
-    [[ "$SILENT_MODE" == "true" ]]
+    [[ "${SILENT:-false}" == "true" ]]
 }
 
 command_exists() {
@@ -333,14 +345,111 @@ service_is_enabled() {
     systemctl is-enabled --quiet "$1" 2>/dev/null
 }
 
+# Uses ip route first, hostname -I as fallback
 get_local_ip() {
-    # Better IP detection: use ip route to find the interface that reaches the internet
     local ip_address
     ip_address=$(ip route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}')
-    # Fallback to hostname -I if ip route fails
     [[ -z "$ip_address" ]] && ip_address=$(hostname -I 2>/dev/null | awk '{print $1}')
     ip_address=${ip_address:-"localhost"}
     echo "$ip_address"
+}
+
+check_port_availability() {
+    local ports=("$@")
+    local ports_in_use=()
+    
+    print_step "Checking port availability..."
+    
+    if command_exists ss; then
+        for port in "${ports[@]}"; do
+            if ss -tuln 2>/dev/null | grep -q ":${port} "; then
+                ports_in_use+=("$port")
+            fi
+        done
+    elif command_exists netstat; then
+        for port in "${ports[@]}"; do
+            if netstat -tuln 2>/dev/null | grep -q ":${port} "; then
+                ports_in_use+=("$port")
+            fi
+        done
+    else
+        print_warning "Cannot check ports (ss/netstat not available)"
+        return 0
+    fi
+    
+    if [[ ${#ports_in_use[@]} -gt 0 ]]; then
+        print_warning "Ports already in use: ${ports_in_use[*]}"
+        print_info "Ensure these ports are free before starting the service."
+        return 1
+    fi
+    
+    print_success "Required ports are available: ${ports[*]}"
+    return 0
+}
+
+###################################################################################
+# Spinner for Long Operations (optional)                                          #
+###################################################################################
+
+# Run a command with an animated spinner, elapsed timer, and log capture.
+# All command output is redirected to LOG_FILE. Console shows a spinner
+# that resolves to ✓/✗ on completion with elapsed time.
+#
+# Usage:
+#   if ! run_with_spinner "Installing packages" sudo apt-get install -y pkg; then
+#       die "Failed to install packages"
+#   fi
+#
+# Notes:
+#   - Command runs in a background subshell (trap ERR does not fire for it)
+#   - Safe with set -e: uses 'wait || exit_code=$?' to prevent errexit from
+#     killing the function before cleanup (temp file removal, log capture)
+#   - Exit code is preserved and returned to caller
+#   - Falls back to running without spinner if mktemp fails
+
+run_with_spinner() {
+    local msg="$1"
+    shift
+    local pid tmp_out exit_code=0
+    local spin_idx=0 start_ts now_ts elapsed
+
+    tmp_out="$(mktemp)" || { log WARN "mktemp failed, running without spinner"; "$@"; return $?; }
+    start_ts="$(date +%s)"
+
+    log STEP "$msg" 2>/dev/null || true
+
+    # Run command in background, capture all output
+    "$@" >"$tmp_out" 2>&1 &
+    pid=$!
+
+    # Show spinner while command runs
+    printf "  %s " "$msg"
+    while kill -0 "$pid" 2>/dev/null; do
+        now_ts="$(date +%s)"
+        elapsed=$((now_ts - start_ts))
+        printf "\r  %s %s (%ds)" "$msg" "${SPINNER_CHARS:spin_idx++%${#SPINNER_CHARS}:1}" "$elapsed"
+        sleep 0.1
+    done
+
+    # Capture exit code (|| prevents set -e from killing before cleanup)
+    wait "$pid" || exit_code=$?
+
+    # Append command output to log file
+    if [[ -n "${LOG_FILE:-}" ]] && [[ -w "${LOG_FILE:-}" ]]; then
+        cat "$tmp_out" >> "$LOG_FILE" 2>/dev/null || true
+    fi
+    rm -f "$tmp_out"
+
+    # Show result with elapsed time
+    now_ts="$(date +%s)"
+    elapsed=$((now_ts - start_ts))
+    if [[ $exit_code -eq 0 ]]; then
+        printf "\r  %s %s (%ds)\n" "$msg" "${C_GREEN}${SYMBOL_SUCCESS}${C_RESET}" "$elapsed"
+    else
+        printf "\r  %s %s (%ds)\n" "$msg" "${C_RED}${SYMBOL_ERROR}${C_RESET}" "$elapsed"
+    fi
+
+    return $exit_code
 }
 
 ###################################################################################
@@ -348,6 +457,8 @@ get_local_ip() {
 ###################################################################################
 
 setup_logging() {
+    # Note: sudo existence check should be done BEFORE calling this function
+    
     # Create log directory with sudo
     if [[ ! -d "$LOG_DIR" ]]; then
         sudo mkdir -p "$LOG_DIR" 2>/dev/null || true
@@ -358,10 +469,37 @@ setup_logging() {
     sudo chown "$(whoami):$(id -gn)" "$LOG_FILE" 2>/dev/null || true
     sudo chmod 644 "$LOG_FILE" 2>/dev/null || true
     
-    log INFO "=== Samba File Server Installation Started ==="
+    log INFO "=== ${SCRIPT_NAME} Started ==="
     log INFO "Version: $SCRIPT_VERSION"
     log INFO "User: $(whoami)"
     log INFO "Date: $(date)"
+}
+
+###################################################################################
+# APT Lock Handling                                                               #
+###################################################################################
+
+prepare_apt() {
+    # Stop unattended-upgrades to avoid apt locks (best-effort)
+    if systemctl is-active --quiet unattended-upgrades 2>/dev/null; then
+        UNATTENDED_UPGRADES_WAS_ACTIVE=true
+        sudo systemctl stop unattended-upgrades 2>/dev/null || true
+        print_info "Temporarily stopped unattended-upgrades"
+    fi
+
+    # Wait for dpkg lock (best-effort)
+    local wait_count=0
+    while sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
+        if [[ $wait_count -eq 0 ]]; then
+            print_subheader "Waiting for apt/dpkg lock..."
+        fi
+        wait_count=$((wait_count + 1))
+        sleep 2
+        if [[ $wait_count -ge 60 ]]; then
+            print_warning "Still waiting for apt lock (60s+) — continuing anyway"
+            break
+        fi
+    done
 }
 
 ###################################################################################
@@ -385,54 +523,54 @@ preflight_checks() {
     fi
     print_success "Running as non-root user: ${C_BOLD}$(whoami)${C_RESET}"
     
-    # Verify sudo access
+    # sudo must exist on minimal images
+    if ! command -v sudo >/dev/null 2>&1; then
+        echo
+        print_error "sudo is not installed. This script requires sudo."
+        echo
+        print_info "Fix (run as root):"
+        echo "  apt-get update && apt-get install -y sudo"
+        echo "  usermod -aG sudo $(whoami)"
+        echo "  # then logout/login"
+        echo
+        die "Execution blocked: sudo not installed"
+    fi
+    
+    # Verify sudo access (may prompt)
     if ! sudo -v 2>/dev/null; then
         echo
         print_error "User $(whoami) does not have sudo privileges"
         echo
-        print_info "To grant sudo access, run as root:"
+        print_info "To grant sudo access (run as root):"
         echo "  ${C_CYAN}usermod -aG sudo $(whoami)${C_RESET}"
-        echo "  ${C_CYAN}# Then logout and login again${C_RESET}"
+        echo "  ${C_CYAN}# then logout/login${C_RESET}"
         echo
         die "Execution blocked: No sudo privileges"
     fi
     print_success "Sudo privileges confirmed"
     
-    # Test sudo authentication
-    if ! sudo -n true 2>/dev/null; then
-        print_info "Sudo authentication required"
-        if ! sudo -v; then
-            die "Sudo authentication failed"
-        fi
-    fi
-    print_success "Sudo authentication successful"
-    
     # Check if running on PVE host (should not be)
     if [[ -f /etc/pve/.version ]] || command_exists pveversion; then
-        die "This script should not run on Proxmox VE host. Run inside a VM or LXC container."
+        die "This script must not run on the Proxmox VE host. Run inside a VM or LXC container."
     fi
     print_success "Not running on Proxmox host"
     
-    # Check for systemd
+    # Check for systemd (required)
     if ! command_exists systemctl; then
         die "systemd not found (is this container systemd-enabled?)"
     fi
     print_success "systemd available"
     
-    # Check Debian version
+    # Check OS (warn if not Debian)
     if [[ -f /etc/os-release ]]; then
         . /etc/os-release
-        if [[ "$ID" != "debian" ]]; then
-            print_warning "This script is designed for Debian. Detected: $ID"
+        if [[ "${ID:-}" != "debian" ]]; then
+            print_warning "Designed for Debian. Detected: ${ID:-unknown}"
         else
-            local version_id="${VERSION_ID:-unknown}"
-            if [[ ! "$version_id" =~ ^(12|13)$ ]]; then
-                print_warning "Script tested on Debian 12/13, you have version $version_id"
-            fi
-            print_success "Debian system detected: ${VERSION:-unknown}"
+            print_success "Debian detected: ${VERSION:-unknown}"
         fi
     else
-        print_warning "Cannot determine OS version"
+        print_warning "Cannot determine OS version (/etc/os-release missing)"
     fi
     
     # Detect environment (LXC vs VM)
@@ -456,6 +594,40 @@ preflight_checks() {
         die "Insufficient disk space. Need at least 100MB free, have ${free_mb}MB"
     fi
     print_success "Sufficient disk space available (${free_mb}MB free)"
+    
+    # Check port availability
+    check_port_availability 445 || true
+    
+    # Check internet connectivity (multiple methods for minimal systems)
+    print_step "Testing internet connectivity..."
+    local internet_ok=false
+
+    if command_exists curl; then
+        if curl -s --max-time 5 --head https://deb.debian.org >/dev/null 2>&1; then
+            print_success "Internet connectivity verified (curl)"
+            internet_ok=true
+        fi
+    fi
+
+    if [[ "$internet_ok" == false ]] && command_exists wget; then
+        if wget -q --timeout=5 --spider https://deb.debian.org 2>/dev/null; then
+            print_success "Internet connectivity verified (wget)"
+            internet_ok=true
+        fi
+    fi
+
+    if [[ "$internet_ok" == false ]]; then
+        # Bash built-in TCP check (no external tools)
+        if timeout 5 bash -c 'cat < /dev/null > /dev/tcp/deb.debian.org/80' 2>/dev/null; then
+            print_success "Internet connectivity verified (dev/tcp)"
+            internet_ok=true
+        fi
+    fi
+
+    if [[ "$internet_ok" == false ]]; then
+        print_warning "Could not verify internet with available tools"
+        print_info "Will verify connectivity during package installation..."
+    fi
     
     echo
 }
@@ -513,13 +685,12 @@ confirm_start() {
         
         case "$choice" in
             yes|y)
-                log INFO "User confirmed, starting installation..."
+                log INFO "User confirmed"
                 echo
                 return 0
                 ;;
             no|n)
-                log INFO "User cancelled installation"
-                print_info "Installation cancelled by user"
+                print_info "Cancelled by user"
                 exit 0
                 ;;
             *)
@@ -538,50 +709,62 @@ configure_interactive() {
     
     # Share name
     if [[ -z "$SHARE_NAME" ]]; then
-        echo
-        print_info "Enter the name for your SMB share (visible to clients)"
-        while true; do
-            echo -ne "${C_CYAN}Share name [default: Share]: ${C_RESET}"
-            read -r input
-            SHARE_NAME="${input:-Share}"
-            
-            # Validate share name (no spaces or special chars)
-            if [[ "$SHARE_NAME" =~ ^[a-zA-Z0-9_-]+$ ]]; then
-                break
-            else
-                print_error "Share name can only contain letters, numbers, underscore, and dash"
-            fi
-        done
+        if is_silent; then
+            SHARE_NAME="Share"
+        else
+            echo
+            print_info "Enter the name for your SMB share (visible to clients)"
+            while true; do
+                echo -ne "${C_CYAN}Share name [default: Share]: ${C_RESET}"
+                read -r input
+                SHARE_NAME="${input:-Share}"
+                
+                # Validate share name (no spaces or special chars)
+                if [[ "$SHARE_NAME" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+                    break
+                else
+                    print_error "Share name can only contain letters, numbers, underscore, and dash"
+                fi
+            done
+        fi
     fi
     print_success "Share name: $SHARE_NAME"
     
     # Share path
     if [[ -z "$SHARE_PATH" ]]; then
         local default_path="/srv/samba/${SHARE_NAME}"
-        echo
-        print_info "Enter the directory path on this server where shared files will be stored"
-        echo -ne "${C_CYAN}Share path [default: $default_path]: ${C_RESET}"
-        read -r input
-        SHARE_PATH="${input:-$default_path}"
+        if is_silent; then
+            SHARE_PATH="$default_path"
+        else
+            echo
+            print_info "Enter the directory path on this server where shared files will be stored"
+            echo -ne "${C_CYAN}Share path [default: $default_path]: ${C_RESET}"
+            read -r input
+            SHARE_PATH="${input:-$default_path}"
+        fi
     fi
     print_success "Share path: $SHARE_PATH"
     
     # Samba group
     if [[ -z "$SAMBA_GROUP" ]]; then
-        echo
-        print_info "Enter the Linux group that will have access to the share"
-        while true; do
-            echo -ne "${C_CYAN}Group name [default: sambashare]: ${C_RESET}"
-            read -r input
-            SAMBA_GROUP="${input:-sambashare}"
-            
-            # Validate group name
-            if [[ "$SAMBA_GROUP" =~ ^[a-z_][a-z0-9_-]*$ ]]; then
-                break
-            else
-                print_error "Group name must start with letter/underscore and contain only lowercase letters, numbers, underscore, dash"
-            fi
-        done
+        if is_silent; then
+            SAMBA_GROUP="sambashare"
+        else
+            echo
+            print_info "Enter the Linux group that will have access to the share"
+            while true; do
+                echo -ne "${C_CYAN}Group name [default: sambashare]: ${C_RESET}"
+                read -r input
+                SAMBA_GROUP="${input:-sambashare}"
+                
+                # Validate group name
+                if [[ "$SAMBA_GROUP" =~ ^[a-z_][a-z0-9_-]*$ ]]; then
+                    break
+                else
+                    print_error "Group name must start with letter/underscore and contain only lowercase letters, numbers, underscore, dash"
+                fi
+            done
+        fi
     fi
     print_success "Group: $SAMBA_GROUP"
     
@@ -605,25 +788,8 @@ configure_interactive() {
 install_packages() {
     print_header "Installing Packages"
     
-    # Stop unattended upgrades if running (track state to restart later)
-    if systemctl is-active --quiet unattended-upgrades 2>/dev/null; then
-        UNATTENDED_UPGRADES_WAS_ACTIVE=true
-        sudo systemctl stop unattended-upgrades 2>/dev/null || true
-        print_info "Temporarily stopped unattended-upgrades"
-    fi
-    
-    # Wait for apt lock
-    local wait_count=0
-    while sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
-        if [[ $wait_count -eq 0 ]]; then
-            print_subheader "Waiting for apt lock to be released..."
-        fi
-        sleep 2
-        ((wait_count++))
-        if [[ $wait_count -gt 30 ]]; then
-            die "Timed out waiting for apt lock"
-        fi
-    done
+    # Prepare apt (stop unattended-upgrades, wait for locks)
+    prepare_apt
     
     local packages=(samba samba-common-bin smbclient cifs-utils acl attr)
     local packages_to_install=()
@@ -638,11 +804,11 @@ install_packages() {
     if [[ ${#packages_to_install[@]} -gt 0 ]]; then
         print_step "Installing packages: ${packages_to_install[*]}"
         
-        if ! sudo apt-get update -qq >>"$LOG_FILE" 2>&1; then
+        if ! run_with_spinner "Updating package lists" sudo apt-get update -y; then
             die "Failed to update package lists"
         fi
         
-        if ! sudo DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get install -y -qq "${packages_to_install[@]}" >>"$LOG_FILE" 2>&1; then
+        if ! run_with_spinner "Installing Samba packages" sudo apt-get install -y -qq "${packages_to_install[@]}"; then
             die "Package installation failed"
         fi
         log SUCCESS "Packages installed"
@@ -787,20 +953,20 @@ generate_config() {
    map system = no
 EOF
 
-    # Check if config changed
+    # Config write contract: compare, backup, install
     local config_changed=false
     if [[ -f "$SAMBA_CONF" ]]; then
         if ! cmp -s "$temp_config" "$SAMBA_CONF"; then
             config_changed=true
-            local backup_file="${SAMBA_CONF}.backup.$(date +%Y%m%d_%H%M%S)"
-            sudo cp "$SAMBA_CONF" "$backup_file"
-            print_info "Config changed - backed up to: $backup_file"
+            local backup="${SAMBA_CONF}.backup.$(date +%Y%m%d_%H%M%S)"
+            sudo cp "$SAMBA_CONF" "$backup"
+            log INFO "Config changed - backed up to: $backup"
         else
-            print_info "Configuration unchanged"
+            log INFO "Configuration unchanged"
         fi
     else
         config_changed=true
-        print_info "Creating new configuration"
+        log INFO "Creating new configuration"
     fi
     
     if [[ "$config_changed" == "true" ]]; then
@@ -818,7 +984,7 @@ EOF
     fi
     print_success "Configuration valid"
     
-    # Export for later use
+    # Export for use in service restart logic
     export CONFIG_CHANGED="$config_changed"
     
     echo
@@ -831,7 +997,7 @@ EOF
 configure_firewall() {
     print_header "Configuring Firewall"
     
-    if [[ "$SKIP_FIREWALL" == "true" ]]; then
+    if [[ "${SKIP_FIREWALL:-false}" == "true" ]]; then
         log INFO "Firewall configuration skipped (SAMBA_SKIP_UFW=true)"
         echo
         return 0
@@ -1015,7 +1181,7 @@ create_user_interactive() {
             continue
         fi
         
-        # Validate username
+        # Validate: lowercase, starts with letter/underscore
         if [[ ! "$username" =~ ^[a-z_][a-z0-9_-]*$ ]]; then
             print_error "Invalid username format (lowercase letters, numbers, underscore, dash)"
             continue
@@ -1024,25 +1190,15 @@ create_user_interactive() {
         if id "$username" &>/dev/null; then
             print_warning "User '$username' already exists in the system"
             
-            # Check if already in samba group
+            # Check if already in required group
             if id -nG "$username" | grep -qw "$SAMBA_GROUP"; then
                 print_info "User already in $SAMBA_GROUP group"
             else
                 print_step "Adding user to $SAMBA_GROUP group..."
                 sudo usermod -aG "$SAMBA_GROUP" "$username"
             fi
-            
-            # Set Samba password
-            print_step "Setting Samba password for: $username"
-            echo
-            if sudo smbpasswd -a "$username"; then
-                sudo smbpasswd -e "$username"
-                print_success "User '$username' configured and enabled"
-            else
-                print_error "Failed to set Samba password"
-            fi
         else
-            # Create system user
+            # Create system user (no home dir, no login shell)
             print_step "Creating system user: $username"
             if sudo useradd -M -s /usr/sbin/nologin -G "$SAMBA_GROUP" "$username"; then
                 print_success "System user created"
@@ -1050,16 +1206,16 @@ create_user_interactive() {
                 print_error "Failed to create system user"
                 continue
             fi
-            
-            # Set Samba password
-            print_step "Setting Samba password for: $username"
-            echo
-            if sudo smbpasswd -a "$username"; then
-                sudo smbpasswd -e "$username"
-                log SUCCESS "User '$username' created and enabled"
-            else
-                print_error "Failed to set Samba password"
-            fi
+        fi
+        
+        # Set application password
+        print_step "Setting Samba password for: $username"
+        echo
+        if sudo smbpasswd -a "$username"; then
+            sudo smbpasswd -e "$username"
+            log SUCCESS "User '$username' created and enabled"
+        else
+            print_error "Failed to set Samba password"
         fi
         
         echo
@@ -1102,12 +1258,15 @@ show_summary() {
     echo "  ${C_DIM}macOS:${C_RESET}    ${C_CYAN}smb://${server_ip}/${SHARE_NAME}${C_RESET}"
     
     echo
-    print_header "Useful Commands"
-    printf "  %b\n" "${C_DIM}# View status${C_RESET}"
+    print_header "Management Commands"
+    printf "  %b\n" "${C_DIM}# Check status${C_RESET}"
     printf "  %b\n" "${C_CYAN}./samba.sh --status${C_RESET}"
     echo
     printf "  %b\n" "${C_DIM}# View logs${C_RESET}"
     printf "  %b\n" "${C_CYAN}./samba.sh --logs${C_RESET}"
+    echo
+    printf "  %b\n" "${C_DIM}# Reconfigure${C_RESET}"
+    printf "  %b\n" "${C_CYAN}./samba.sh --configure${C_RESET}"
     echo
     printf "  %b\n" "${C_DIM}# Create new user${C_RESET}"
     printf "  %b\n" "${C_CYAN}sudo useradd -M -s /usr/sbin/nologin -G $SAMBA_GROUP <username>${C_RESET}"
@@ -1116,6 +1275,9 @@ show_summary() {
     echo
     printf "  %b\n" "${C_DIM}# Restart service${C_RESET}"
     printf "  %b\n" "${C_CYAN}sudo systemctl restart smbd${C_RESET}"
+    echo
+    printf "  %b\n" "${C_DIM}# Uninstall${C_RESET}"
+    printf "  %b\n" "${C_CYAN}./samba.sh --uninstall${C_RESET}"
     
     echo
     print_header "Service Status"
@@ -1127,8 +1289,16 @@ show_summary() {
     fi
     
     echo
+    print_header "File Locations"
+    print_kv "Configuration" "$SAMBA_CONF"
+    print_kv "Share Directory" "$SHARE_PATH"
+    print_kv "Installation Log" "$LOG_FILE"
+    
+    echo
     draw_separator
     echo
+    
+    log INFO "=== ${SCRIPT_NAME} Installation Completed ==="
 }
 
 ###################################################################################
@@ -1263,7 +1433,7 @@ cmd_configure() {
     
     print_header "Reconfigure Samba"
     
-    print_warning "This will update the Samba configuration."
+    print_warning "This will replace the current configuration."
     print_info "A backup will be created before changes."
     
     if ! is_silent; then
@@ -1274,16 +1444,12 @@ cmd_configure() {
             choice=$(echo "$choice" | tr '[:upper:]' '[:lower:]')
             
             case "$choice" in
-                yes|y)
-                    break
-                    ;;
+                yes|y) break ;;
                 no|n)
                     print_info "Reconfiguration cancelled"
                     exit 0
                     ;;
-                *)
-                    print_error "Invalid input. Please enter 'yes' or 'no'"
-                    ;;
+                *) print_error "Invalid input. Please enter 'yes' or 'no'" ;;
             esac
         done
     fi
@@ -1299,7 +1465,7 @@ cmd_configure() {
     generate_config
     start_services
     
-    log SUCCESS "Samba reconfigured successfully"
+    log SUCCESS "Configuration updated successfully"
     show_summary
 }
 
@@ -1311,7 +1477,14 @@ cmd_uninstall() {
     
     print_header "Uninstall Samba"
     
-    print_warning "This will remove Samba packages and configuration."
+    if ! command_exists smbd; then
+        print_info "Samba is not installed"
+        exit 0
+    fi
+    
+    print_warning "This will remove:"
+    print_subheader "Samba packages and configuration"
+    print_subheader "Systemd services"
     print_warning "Share directories will NOT be deleted."
     
     if ! is_silent; then
@@ -1322,21 +1495,17 @@ cmd_uninstall() {
             choice=$(echo "$choice" | tr '[:upper:]' '[:lower:]')
             
             case "$choice" in
-                yes|y)
-                    break
-                    ;;
+                yes|y) break ;;
                 no|n)
                     print_info "Uninstall cancelled"
                     exit 0
                     ;;
-                *)
-                    print_error "Invalid input. Please enter 'yes' or 'no'"
-                    ;;
+                *) print_error "Invalid input. Please enter 'yes' or 'no'" ;;
             esac
         done
     fi
     
-    # Stop services
+    # Stop and disable services
     print_step "Stopping Samba services..."
     sudo systemctl stop smbd 2>/dev/null || true
     sudo systemctl stop nmbd 2>/dev/null || true
@@ -1359,8 +1528,8 @@ cmd_uninstall() {
     sudo rm -rf /var/lib/samba 2>/dev/null || true
     sudo rm -rf /var/cache/samba 2>/dev/null || true
     
-    # Remove firewall rules
-    if command_exists ufw && sudo ufw status 2>/dev/null | grep -q "Status: active"; then
+    # Remove firewall rules (only if UFW active)
+    if sudo ufw status 2>/dev/null | grep -q "Status: active"; then
         print_step "Removing firewall rules..."
         sudo ufw delete allow 445/tcp 2>/dev/null || true
         sudo ufw delete allow 139/tcp 2>/dev/null || true
@@ -1381,32 +1550,13 @@ cmd_uninstall() {
 main() {
     # Handle post-install commands (these don't need the full pre-flight)
     case "${1:-}" in
-        --status)
-            cmd_status
-            exit 0
-            ;;
-        --logs)
-            cmd_logs "${2:-50}"
-            exit 0
-            ;;
-        --configure)
-            cmd_configure
-            exit 0
-            ;;
-        --uninstall)
-            cmd_uninstall
-            exit 0
-            ;;
-        --version|-v)
-            echo "samba.sh v${SCRIPT_VERSION}"
-            exit 0
-            ;;
-        "")
-            # Continue with installation
-            ;;
-        *)
-            die "Unknown option: $1 (use --help for usage)"
-            ;;
+        --status)    cmd_status; exit 0 ;;
+        --logs)      cmd_logs "${2:-50}"; exit 0 ;;
+        --configure) cmd_configure; exit 0 ;;
+        --uninstall) cmd_uninstall; exit 0 ;;
+        --version|-v) echo "${SCRIPT_NAME}.sh v${SCRIPT_VERSION}"; exit 0 ;;
+        "") ;;  # Continue with installation
+        *) die "Unknown option: $1 (use --help for usage)" ;;
     esac
     
     # Early check: Verify sudo is available before we do anything
@@ -1433,8 +1583,8 @@ main() {
         exit 1
     fi
     
-    # Check if Samba is already installed
-    if command -v smbd >/dev/null 2>&1 || [[ -f "$SAMBA_CONF" ]]; then
+    # Check if Samba is already installed (idempotency)
+    if command_exists smbd || [[ -f "$SAMBA_CONF" ]]; then
         clear
         draw_box "Samba File Server - Already Installed"
         
@@ -1442,7 +1592,7 @@ main() {
         local version="unknown"
         if smbd -V >/dev/null 2>&1; then
             version=$(smbd -V 2>&1 | head -1)
-        elif command -v dpkg-query >/dev/null 2>&1; then
+        elif command_exists dpkg-query; then
             version=$(dpkg-query -W -f='${Version}' samba 2>/dev/null || echo "unknown")
         fi
         
@@ -1453,7 +1603,7 @@ main() {
         print_kv "Enabled" "$(systemctl is-enabled smbd 2>/dev/null || echo 'unknown')"
         
         # Show configured shares using testparm (Samba's official config parser)
-        if command -v testparm >/dev/null 2>&1; then
+        if command_exists testparm; then
             local shares
             shares=$(testparm -s 2>/dev/null | grep -E '^\[' | grep -v '\[global\]' || true)
             if [[ -n "$shares" ]]; then
@@ -1521,8 +1671,6 @@ main() {
     
     # Interactive user creation
     create_user_interactive
-    
-    log INFO "=== Samba File Server Installation Completed ==="
 }
 
 # Run main function

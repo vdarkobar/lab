@@ -5,14 +5,15 @@
 # Installs Docker + Compose and deploys NPM with MariaDB                   #
 #############################################################################
 
-readonly SCRIPT_VERSION="1.0.0"
+readonly SCRIPT_VERSION="1.1.0"
+readonly SCRIPT_NAME="npm-docker"
 
 # Handle --help flag early (before sourcing libraries)
 case "${1:-}" in
     --help|-h)
         echo "Nginx Proxy Manager Installer v${SCRIPT_VERSION}"
         echo
-        echo "Usage: $0 [--help]"
+        echo "Usage: $0 [--help] [--status] [--logs [N]] [--configure] [--uninstall]"
         echo
         echo "Installation:"
         echo "  bootstrap.sh → hardening.sh → Select \"Nginx Proxy Manager\""
@@ -33,8 +34,22 @@ case "${1:-}" in
         echo
         echo "Environment variables:"
         echo "  DOCKER_DIST=<codename>   Override Debian codename for Docker repo"
+        echo "  NPM_SILENT=true          Non-interactive mode (safe defaults)"
+        echo "  NPM_SKIP_UFW=true        Skip firewall configuration"
         echo "  NPM_PORT=<port>          Pre-set admin port (49152-65535)"
         echo "  NPM_TZ=<timezone>        Pre-set timezone (e.g., Europe/Berlin)"
+        echo
+        echo "Post-install commands:"
+        echo "  --status      Show service status and access info"
+        echo "  --logs [N]    Show last N lines of logs (default: 50)"
+        echo "  --configure   Reconfigure application"
+        echo "  --uninstall   Remove application"
+        echo "  --version     Show version"
+        echo
+        echo "Network requirements:"
+        echo "  Inbound 80/tcp           HTTP proxy"
+        echo "  Inbound 443/tcp          HTTPS proxy"
+        echo "  Inbound <admin-port>/tcp Admin web UI"
         echo
         echo "Files created:"
         echo "  ~/npm/docker-compose.yml         Docker Compose configuration"
@@ -43,6 +58,7 @@ case "${1:-}" in
         echo "  ~/npm/data/                      NPM application data"
         echo "  ~/npm/letsencrypt/               SSL certificates"
         echo "  ~/npm/mysql/                     MariaDB data"
+        echo "  /var/log/lab/npm-docker-*.log    Installation logs"
         echo
         echo "First time setup:"
         echo "  Open the Admin URL and create your admin account"
@@ -55,6 +71,7 @@ esac
 #############################################################################
 
 set -euo pipefail
+export DEBIAN_FRONTEND=noninteractive
 
 # Secure file creation by default
 umask 077
@@ -62,12 +79,16 @@ umask 077
 # Track services we stop (to restart later)
 UNATTENDED_UPGRADES_WAS_ACTIVE=false
 
+# App config (env overrides)
+NPM_SILENT="${NPM_SILENT:-false}"; SILENT="$NPM_SILENT"
+NPM_SKIP_UFW="${NPM_SKIP_UFW:-false}"; SKIP_FIREWALL="$NPM_SKIP_UFW"
+
 # Get the directory where this script is located
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Logging
 readonly LOG_DIR="/var/log/lab"
-readonly LOG_FILE="${LOG_DIR}/npm-docker-$(date +%Y%m%d-%H%M%S).log"
+readonly LOG_FILE="${LOG_DIR}/${SCRIPT_NAME}-$(date +%Y%m%d-%H%M%S).log"
 
 #############################################################################
 # Terminal Formatting (embedded from formatting.sh)                         #
@@ -83,12 +104,10 @@ if [[ -t 1 ]] && command -v tput >/dev/null 2>&1 && tput setaf 1 >/dev/null 2>&1
     readonly C_DIM=$(tput dim)
     
     # Foreground colors
-    readonly C_BLACK=$(tput setaf 0)
     readonly C_RED=$(tput setaf 1)
     readonly C_GREEN=$(tput setaf 2)
     readonly C_YELLOW=$(tput setaf 3)
     readonly C_BLUE=$(tput setaf 4)
-    readonly C_MAGENTA=$(tput setaf 5)
     readonly C_CYAN=$(tput setaf 6)
     readonly C_WHITE=$(tput setaf 7)
     
@@ -102,12 +121,10 @@ else
     readonly C_RESET=""
     readonly C_BOLD=""
     readonly C_DIM=""
-    readonly C_BLACK=""
     readonly C_RED=""
     readonly C_GREEN=""
     readonly C_YELLOW=""
     readonly C_BLUE=""
-    readonly C_MAGENTA=""
     readonly C_CYAN=""
     readonly C_WHITE=""
     readonly C_BRIGHT_GREEN=""
@@ -131,6 +148,16 @@ else
     readonly SYMBOL_INFO="i"
     readonly SYMBOL_ARROW=">"
     readonly SYMBOL_BULLET="*"
+fi
+
+#############################################################################
+# Spinner Characters (optional - only needed if run_with_spinner is used)  #
+#############################################################################
+
+if [[ "${LANG:-}" =~ UTF-8 ]] || [[ "${LC_ALL:-}" =~ UTF-8 ]]; then
+    readonly SPINNER_CHARS='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+else
+    readonly SPINNER_CHARS='|/-\'
 fi
 
 #############################################################################
@@ -231,7 +258,157 @@ die() {
 }
 
 # Error trap for better debugging (set after print_error is defined)
-trap 'print_error "Error on line $LINENO: $BASH_COMMAND"' ERR
+trap 'print_error "Error at line $LINENO: $BASH_COMMAND"; log ERROR "Error at line $LINENO: $BASH_COMMAND"' ERR
+
+#############################################################################
+# Helper Functions                                                          #
+#############################################################################
+
+is_silent() {
+    [[ "${SILENT:-false}" == "true" ]]
+}
+
+command_exists() {
+    command -v "$1" &>/dev/null
+}
+
+service_is_active() {
+    systemctl is-active --quiet "$1" 2>/dev/null
+}
+
+service_is_enabled() {
+    systemctl is-enabled --quiet "$1" 2>/dev/null
+}
+
+# Uses ip route first, hostname -I as fallback
+get_local_ip() {
+    local ip_address
+    ip_address=$(ip route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}')
+    [[ -z "$ip_address" ]] && ip_address=$(hostname -I 2>/dev/null | awk '{print $1}')
+    ip_address=${ip_address:-"localhost"}
+    echo "$ip_address"
+}
+
+check_port_availability() {
+    local ports=("$@")
+    local ports_in_use=()
+    
+    print_step "Checking port availability..."
+    
+    if command_exists ss; then
+        for port in "${ports[@]}"; do
+            if ss -tuln 2>/dev/null | grep -q ":${port} "; then
+                ports_in_use+=("$port")
+            fi
+        done
+    elif command_exists netstat; then
+        for port in "${ports[@]}"; do
+            if netstat -tuln 2>/dev/null | grep -q ":${port} "; then
+                ports_in_use+=("$port")
+            fi
+        done
+    else
+        print_warning "Cannot check ports (ss/netstat not available)"
+        return 0
+    fi
+    
+    if [[ ${#ports_in_use[@]} -gt 0 ]]; then
+        print_warning "Ports already in use: ${ports_in_use[*]}"
+        print_info "Ensure these ports are free before starting the service."
+        return 1
+    fi
+    
+    print_success "Required ports are available: ${ports[*]}"
+    return 0
+}
+
+prepare_apt() {
+    # Stop unattended-upgrades to avoid apt locks (best-effort)
+    if service_is_active unattended-upgrades; then
+        UNATTENDED_UPGRADES_WAS_ACTIVE=true
+        sudo systemctl stop unattended-upgrades 2>/dev/null || true
+        print_info "Temporarily stopped unattended-upgrades"
+    fi
+
+    # Wait for dpkg lock (best-effort)
+    local wait_count=0
+    while sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
+        if [[ $wait_count -eq 0 ]]; then
+            print_subheader "Waiting for apt/dpkg lock..."
+        fi
+        wait_count=$((wait_count + 1))
+        sleep 2
+        if [[ $wait_count -ge 60 ]]; then
+            print_warning "Still waiting for apt lock (60s+) — continuing anyway"
+            break
+        fi
+    done
+}
+
+#############################################################################
+# Spinner for Long Operations (optional)                                    #
+#############################################################################
+
+# Run a command with an animated spinner, elapsed timer, and log capture.
+# All command output is redirected to LOG_FILE. Console shows a spinner
+# that resolves to ✓/✗ on completion with elapsed time.
+#
+# Usage:
+#   if ! run_with_spinner "Installing packages" sudo apt-get install -y pkg; then
+#       die "Failed to install packages"
+#   fi
+#
+# Notes:
+#   - Command runs in a background subshell (trap ERR does not fire for it)
+#   - Safe with set -e: uses 'wait || exit_code=$?' to prevent errexit from
+#     killing the function before cleanup (temp file removal, log capture)
+#   - Exit code is preserved and returned to caller
+#   - Falls back to running without spinner if mktemp fails
+
+run_with_spinner() {
+    local msg="$1"
+    shift
+    local pid tmp_out exit_code=0
+    local spin_idx=0 start_ts now_ts elapsed
+
+    tmp_out="$(mktemp)" || { log WARN "mktemp failed, running without spinner"; "$@"; return $?; }
+    start_ts="$(date +%s)"
+
+    log STEP "$msg" 2>/dev/null || true
+
+    # Run command in background, capture all output
+    "$@" >"$tmp_out" 2>&1 &
+    pid=$!
+
+    # Show spinner while command runs
+    printf "  %s " "$msg"
+    while kill -0 "$pid" 2>/dev/null; do
+        now_ts="$(date +%s)"
+        elapsed=$((now_ts - start_ts))
+        printf "\r  %s %s (%ds)" "$msg" "${SPINNER_CHARS:spin_idx++%${#SPINNER_CHARS}:1}" "$elapsed"
+        sleep 0.1
+    done
+
+    # Capture exit code (|| prevents set -e from killing before cleanup)
+    wait "$pid" || exit_code=$?
+
+    # Append command output to log file
+    if [[ -n "${LOG_FILE:-}" ]] && [[ -w "${LOG_FILE:-}" ]]; then
+        cat "$tmp_out" >> "$LOG_FILE" 2>/dev/null || true
+    fi
+    rm -f "$tmp_out"
+
+    # Show result with elapsed time
+    now_ts="$(date +%s)"
+    elapsed=$((now_ts - start_ts))
+    if [[ $exit_code -eq 0 ]]; then
+        printf "\r  %s %s (%ds)\n" "$msg" "${C_GREEN}${SYMBOL_SUCCESS}${C_RESET}" "$elapsed"
+    else
+        printf "\r  %s %s (%ds)\n" "$msg" "${C_RED}${SYMBOL_ERROR}${C_RESET}" "$elapsed"
+    fi
+
+    return $exit_code
+}
 
 #############################################################################
 # Configuration Variables                                                   #
@@ -258,7 +435,7 @@ setup_logging() {
     sudo chown "$(whoami):$(id -gn)" "$LOG_FILE" 2>/dev/null || true
     sudo chmod 644 "$LOG_FILE" 2>/dev/null || true
     
-    log INFO "=== NPM Docker Installation Started ==="
+    log INFO "=== ${SCRIPT_NAME} Started ==="
     log INFO "Version: $SCRIPT_VERSION"
     log INFO "User: $(whoami)"
     log INFO "Date: $(date)"
@@ -271,88 +448,103 @@ setup_logging() {
 preflight_checks() {
     print_header "Pre-flight Checks"
     
-    # Must not run as root
+    # CRITICAL: Enforce non-root execution
     if [[ ${EUID} -eq 0 ]]; then
+        echo
         print_error "This script must NOT be run as root!"
-        print_info "Correct usage: ${C_CYAN}./$(basename "$0")${C_RESET}"
+        echo
+        print_info "Correct usage:"
+        echo "  ${C_CYAN}./$(basename "$0")${C_RESET}"
+        echo
+        print_info "The script will use sudo internally when needed."
+        echo
         die "Execution blocked: Running as root user"
     fi
     print_success "Running as non-root user: ${C_BOLD}$(whoami)${C_RESET}"
     
-    # Verify sudo access
+    # sudo must exist on minimal images
+    if ! command_exists sudo; then
+        echo
+        print_error "sudo is not installed. This script requires sudo."
+        echo
+        print_info "Fix (run as root):"
+        echo "  apt-get update && apt-get install -y sudo"
+        echo "  usermod -aG sudo $(whoami)"
+        echo "  # then logout/login"
+        echo
+        die "Execution blocked: sudo not installed"
+    fi
+    
+    # Verify sudo access (may prompt)
     if ! sudo -v 2>/dev/null; then
-        die "User $(whoami) does not have sudo privileges"
+        echo
+        print_error "User $(whoami) does not have sudo privileges"
+        echo
+        print_info "To grant sudo access (run as root):"
+        echo "  ${C_CYAN}usermod -aG sudo $(whoami)${C_RESET}"
+        echo "  ${C_CYAN}# then logout/login${C_RESET}"
+        echo
+        die "Execution blocked: No sudo privileges"
     fi
     print_success "Sudo privileges confirmed"
     
-    # Check if running on PVE host
-    if [[ -f /etc/pve/.version ]] || command -v pveversion &>/dev/null; then
-        die "This script should not run on Proxmox VE host. Run inside a VM or LXC."
+    # Check if running on PVE host (should not be)
+    if [[ -f /etc/pve/.version ]] || command_exists pveversion; then
+        die "This script must not run on the Proxmox VE host. Run inside a VM or LXC container."
     fi
     print_success "Not running on Proxmox host"
     
-    # Check internet connectivity (try multiple methods for minimal systems)
-    # Use download.docker.com as it's more representative of actual needs
+    # Check for systemd (required)
+    if ! command_exists systemctl; then
+        die "systemd not found (is this container systemd-enabled?)"
+    fi
+    print_success "systemd available"
+    
+    # Check OS (warn if not Debian)
+    if [[ -f /etc/os-release ]]; then
+        . /etc/os-release
+        if [[ "${ID:-}" != "debian" ]]; then
+            print_warning "Designed for Debian. Detected: ${ID:-unknown}"
+        else
+            print_success "Debian detected: ${VERSION:-unknown}"
+        fi
+    else
+        print_warning "Cannot determine OS version (/etc/os-release missing)"
+    fi
+    
+    # Check internet connectivity (multiple methods for minimal systems)
     print_step "Testing internet connectivity..."
     local internet_ok=false
     
-    # Method 1: curl (if available)
-    if command -v curl >/dev/null 2>&1; then
-        if curl -s --max-time 5 --head https://download.docker.com >/dev/null 2>&1; then
+    if command_exists curl; then
+        if curl -s --max-time 5 --head https://deb.debian.org >/dev/null 2>&1; then
             print_success "Internet connectivity verified (curl)"
             internet_ok=true
         fi
     fi
     
-    # Method 2: wget (if available)
-    if [[ "$internet_ok" == false ]] && command -v wget >/dev/null 2>&1; then
-        if wget -q --timeout=5 --spider https://download.docker.com 2>/dev/null; then
+    if [[ "$internet_ok" == false ]] && command_exists wget; then
+        if wget -q --timeout=5 --spider https://deb.debian.org 2>/dev/null; then
             print_success "Internet connectivity verified (wget)"
             internet_ok=true
         fi
     fi
     
-    # Method 3: Bash /dev/tcp (built-in, no external tools needed)
     if [[ "$internet_ok" == false ]]; then
-        if (echo >/dev/tcp/download.docker.com/443) 2>/dev/null; then
-            print_success "Internet connectivity verified (tcp)"
+        # Bash built-in TCP check (no external tools)
+        if timeout 5 bash -c 'cat < /dev/null > /dev/tcp/deb.debian.org/80' 2>/dev/null; then
+            print_success "Internet connectivity verified (dev/tcp)"
             internet_ok=true
         fi
     fi
     
-    # Method 4: If all methods fail, warn but continue - let apt-get be the real test
     if [[ "$internet_ok" == false ]]; then
         print_warning "Could not verify internet with available tools"
-        print_info "Will verify connectivity when installing packages..."
+        print_info "Will verify connectivity during package installation..."
     fi
     
     # Check if ports 80/443 are available
-    print_step "Checking port availability..."
-    local ports_in_use=()
-    
-    # Only check if ss or netstat is available
-    if command -v ss >/dev/null 2>&1; then
-        for port in 80 443; do
-            if ss -tuln 2>/dev/null | grep -q ":${port} "; then
-                ports_in_use+=("$port")
-            fi
-        done
-    elif command -v netstat >/dev/null 2>&1; then
-        for port in 80 443; do
-            if netstat -tuln 2>/dev/null | grep -q ":${port} "; then
-                ports_in_use+=("$port")
-            fi
-        done
-    else
-        print_warning "Cannot check ports (ss/netstat not available)"
-    fi
-    
-    if [[ ${#ports_in_use[@]} -gt 0 ]]; then
-        print_warning "Ports already in use: ${ports_in_use[*]}"
-        print_info "NPM requires ports 80 and 443. Ensure they're free before starting."
-    elif command -v ss >/dev/null 2>&1 || command -v netstat >/dev/null 2>&1; then
-        print_success "Ports 80 and 443 are available"
-    fi
+    check_port_availability 80 443
     
     echo
 }
@@ -385,10 +577,12 @@ install_prerequisites() {
     done
     
     if [[ ${#missing_packages[@]} -gt 0 ]]; then
-        print_step "Installing missing packages: ${missing_packages[*]}"
-        sudo apt-get update >/dev/null 2>&1
-        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${missing_packages[@]}" >/dev/null 2>&1
-        print_success "Missing packages installed"
+        if ! run_with_spinner "Updating package lists" sudo apt-get update -y; then
+            die "Failed to update package lists"
+        fi
+        if ! run_with_spinner "Installing prerequisites: ${missing_packages[*]}" sudo apt-get install -y "${missing_packages[@]}"; then
+            die "Failed to install prerequisites"
+        fi
     fi
     
     echo
@@ -432,7 +626,7 @@ install_docker() {
     print_header "Docker Installation"
     
     # Check if Docker is already installed and working
-    if command -v docker >/dev/null 2>&1 && sudo docker info >/dev/null 2>&1; then
+    if command_exists docker && sudo docker info >/dev/null 2>&1; then
         print_success "Docker is already installed and running"
         sudo docker --version
         sudo docker compose version
@@ -442,12 +636,8 @@ install_docker() {
     
     local need_apt_update=true
     
-    # Stop unattended upgrades if running (track state to restart later)
-    if systemctl is-active --quiet unattended-upgrades 2>/dev/null; then
-        UNATTENDED_UPGRADES_WAS_ACTIVE=true
-        sudo systemctl stop unattended-upgrades 2>/dev/null || true
-        print_info "Temporarily stopped unattended-upgrades"
-    fi
+    # Handle apt locks and unattended-upgrades
+    prepare_apt
     
     # Docker GPG key
     print_step "Setting up Docker repository..."
@@ -495,11 +685,14 @@ install_docker() {
             print_success "Already installed: $pkg"
         else
             if [[ "$need_apt_update" == true ]]; then
-                sudo apt-get update >/dev/null 2>&1
+                if ! run_with_spinner "Updating package lists" sudo apt-get update -y; then
+                    die "Failed to update package lists"
+                fi
                 need_apt_update=false
             fi
-            print_subheader "Installing: $pkg"
-            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "$pkg" >/dev/null 2>&1
+            if ! run_with_spinner "Installing: $pkg" sudo apt-get install -y "$pkg"; then
+                die "Failed to install $pkg"
+            fi
         fi
     done
     
@@ -589,27 +782,31 @@ generate_password() {
 generate_secrets() {
     print_header "Generating Database Credentials"
     
-    local db_root_secret="$SECRETS_DIR/db_root_pwd.secret"
-    local mysql_secret="$SECRETS_DIR/mysql_pwd.secret"
-    
-    # Generate secure passwords (35 chars, alphanumeric)
-    if [[ -f "$db_root_secret" ]] && [[ -s "$db_root_secret" ]]; then
-        print_info "DB root password already exists (not regenerating)"
-    else
-        generate_password 35 > "$db_root_secret"
-        chmod 600 "$db_root_secret"
-        print_success "Generated DB root password"
-    fi
-    
-    if [[ -f "$mysql_secret" ]] && [[ -s "$mysql_secret" ]]; then
-        print_info "MySQL user password already exists (not regenerating)"
-    else
-        generate_password 35 > "$mysql_secret"
-        chmod 600 "$mysql_secret"
-        print_success "Generated MySQL user password"
-    fi
+    ensure_secret "$SECRETS_DIR/db_root_pwd.secret" 35 "DB root password"
+    ensure_secret "$SECRETS_DIR/mysql_pwd.secret" 35 "MySQL user password"
     
     echo
+}
+
+# Idempotent + atomic secret creation helper (never prints secret values)
+ensure_secret() {
+    local file="$1"
+    local length="${2:-35}"
+    local label="${3:-secret}"
+
+    if [[ -f "$file" ]] && [[ -s "$file" ]]; then
+        log INFO "${label} already exists (not regenerating)"
+        return 0
+    fi
+
+    # Write atomically to avoid partial secrets on interruption
+    local tmp
+    tmp="$(mktemp "${file}.tmp.XXXXXX")"
+    generate_password "$length" > "$tmp"
+    chmod 600 "$tmp"
+    mv -f "$tmp" "$file"
+
+    log SUCCESS "Generated ${label}"
 }
 
 #############################################################################
@@ -626,9 +823,12 @@ get_user_configuration() {
     if [[ -n "${NPM_TZ:-}" ]]; then
         TIMEZONE="$NPM_TZ"
         print_success "Using timezone from environment: $TIMEZONE"
+    elif is_silent; then
+        TIMEZONE="$DEFAULT_TZ"
+        print_success "Silent mode - using default timezone: $TIMEZONE"
     else
         # Get list of timezones
-        if command -v timedatectl &>/dev/null; then
+        if command_exists timedatectl; then
             local tzones
             tzones="$(timedatectl list-timezones 2>/dev/null)" || true
             
@@ -668,6 +868,9 @@ get_user_configuration() {
     if [[ -n "${NPM_PORT:-}" ]]; then
         ADMIN_PORT="$NPM_PORT"
         print_success "Using port from environment: $ADMIN_PORT"
+    elif is_silent; then
+        ADMIN_PORT="$MIN_PORT"
+        print_success "Silent mode - using default port: $ADMIN_PORT"
     else
         print_info "NPM admin interface port (${C_CYAN}${MIN_PORT}-${MAX_PORT}${C_RESET})"
         print_subheader "This is for the web UI, not for proxied services"
@@ -843,6 +1046,12 @@ EOF
 configure_firewall() {
     print_header "Configuring Firewall"
     
+    if [[ "${SKIP_FIREWALL:-false}" == "true" ]]; then
+        log INFO "Firewall configuration skipped (NPM_SKIP_UFW=true)"
+        echo
+        return 0
+    fi
+    
     # Test if UFW is available and functional
     local ufw_status
     if ! ufw_status=$(sudo ufw status 2>&1); then
@@ -921,68 +1130,73 @@ configure_firewall() {
 start_docker_compose() {
     print_header "Deploy NPM Stack"
     
-    echo
-    print_info "Ready to start the NPM stack"
-    print_subheader "This will pull images and start containers"
-    echo
+    local do_start=false
     
-    while true; do
-        printf "%b" "${C_CYAN}${C_BOLD}Start NPM now?${C_RESET} ${C_DIM}(yes/no)${C_RESET} "
-        read -r response
-        response=$(echo "$response" | tr '[:upper:]' '[:lower:]')
+    if is_silent; then
+        do_start=true
+        print_info "Silent mode - starting NPM stack automatically"
+    else
+        echo
+        print_info "Ready to start the NPM stack"
+        print_subheader "This will pull images and start containers"
+        echo
         
-        case "$response" in
-            yes|y)
-                echo
-                print_step "Starting NPM stack..."
-                print_info "This may take a few minutes on first run..."
-                echo
-                
-                cd "$WORK_DIR"
-                
-                # Test if docker works without sudo (group may not be active in current session)
-                if docker info >/dev/null 2>&1; then
-                    if docker compose up -d; then
-                        print_success "NPM stack started successfully"
-                    else
-                        print_error "Docker compose failed"
-                        print_info "Check logs with: docker compose -f $WORK_DIR/docker-compose.yml logs"
-                        return 1
-                    fi
-                else
-                    if sudo docker compose up -d; then
-                        print_success "NPM stack started successfully"
-                    else
-                        print_error "Docker compose failed"
-                        print_info "Check logs with: sudo docker compose -f $WORK_DIR/docker-compose.yml logs"
-                        return 1
-                    fi
-                fi
-                
-                echo
-                print_step "Waiting for services to be ready..."
-                sleep 10
-                
-                # Check container status
-                print_step "Checking container status..."
-                if docker info >/dev/null 2>&1; then
-                    docker compose ps
-                else
-                    sudo docker compose ps
-                fi
-                
-                return 0
-                ;;
-            no|n)
-                print_info "Stack not started"
-                print_info "Start manually with: cd $WORK_DIR && sudo docker compose up -d"
-                return 0
-                ;;
-            *)
-                print_error "Please answer 'yes' or 'no'"
-                ;;
-        esac
-    done
+        while true; do
+            printf "%b" "${C_CYAN}${C_BOLD}Start NPM now?${C_RESET} ${C_DIM}(yes/no)${C_RESET} "
+            read -r response
+            response=$(echo "$response" | tr '[:upper:]' '[:lower:]')
+            
+            case "$response" in
+                yes|y) do_start=true; break ;;
+                no|n)
+                    print_info "Stack not started"
+                    print_info "Start manually with: cd $WORK_DIR && sudo docker compose up -d"
+                    return 0
+                    ;;
+                *) print_error "Please answer 'yes' or 'no'" ;;
+            esac
+        done
+    fi
+    
+    if [[ "$do_start" == true ]]; then
+        echo
+        print_step "Starting NPM stack..."
+        print_info "This may take a few minutes on first run..."
+        echo
+        
+        cd "$WORK_DIR"
+        
+        # Test if docker works without sudo (group may not be active in current session)
+        if docker info >/dev/null 2>&1; then
+            if docker compose up -d; then
+                print_success "NPM stack started successfully"
+            else
+                print_error "Docker compose failed"
+                print_info "Check logs with: docker compose -f $WORK_DIR/docker-compose.yml logs"
+                return 1
+            fi
+        else
+            if sudo docker compose up -d; then
+                print_success "NPM stack started successfully"
+            else
+                print_error "Docker compose failed"
+                print_info "Check logs with: sudo docker compose -f $WORK_DIR/docker-compose.yml logs"
+                return 1
+            fi
+        fi
+        
+        echo
+        print_step "Waiting for services to be ready..."
+        sleep 10
+        
+        # Check container status
+        print_step "Checking container status..."
+        if docker info >/dev/null 2>&1; then
+            docker compose ps
+        else
+            sudo docker compose ps
+        fi
+    fi
 }
 
 #############################################################################
@@ -990,12 +1204,8 @@ start_docker_compose() {
 #############################################################################
 
 show_summary() {
-    # Better IP detection: use ip route to find the interface that reaches the internet
     local ip_address
-    ip_address=$(ip route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}')
-    # Fallback to hostname -I if ip route fails
-    [[ -z "$ip_address" ]] && ip_address=$(hostname -I 2>/dev/null | awk '{print $1}')
-    ip_address=${ip_address:-"<your-ip>"}
+    ip_address=$(get_local_ip)
     
     echo
     draw_box "Installation Complete"
@@ -1012,18 +1222,24 @@ show_summary() {
     print_info "You will be prompted to create an admin account"
     
     echo
-    print_header "Useful Commands"
+    print_header "Management Commands"
+    printf "  %b\n" "${C_DIM}# Check status${C_RESET}"
+    printf "  %b\n" "${C_CYAN}./npm-docker.sh --status${C_RESET}"
+    echo
     printf "  %b\n" "${C_DIM}# View logs${C_RESET}"
-    printf "  %b\n" "${C_CYAN}cd ~/npm && sudo docker compose logs -f${C_RESET}"
+    printf "  %b\n" "${C_CYAN}./npm-docker.sh --logs${C_RESET}"
+    echo
+    printf "  %b\n" "${C_DIM}# Reconfigure${C_RESET}"
+    printf "  %b\n" "${C_CYAN}./npm-docker.sh --configure${C_RESET}"
     echo
     printf "  %b\n" "${C_DIM}# Restart stack${C_RESET}"
     printf "  %b\n" "${C_CYAN}cd ~/npm && sudo docker compose restart${C_RESET}"
     echo
-    printf "  %b\n" "${C_DIM}# Stop stack${C_RESET}"
-    printf "  %b\n" "${C_CYAN}cd ~/npm && sudo docker compose down${C_RESET}"
-    echo
     printf "  %b\n" "${C_DIM}# Update containers${C_RESET}"
     printf "  %b\n" "${C_CYAN}cd ~/npm && sudo docker compose pull && sudo docker compose up -d${C_RESET}"
+    echo
+    printf "  %b\n" "${C_DIM}# Uninstall${C_RESET}"
+    printf "  %b\n" "${C_CYAN}./npm-docker.sh --uninstall${C_RESET}"
     
     echo
     print_header "File Locations"
@@ -1038,7 +1254,167 @@ show_summary() {
     draw_separator
     echo
     
-    log INFO "=== NPM Docker Installation Completed ==="
+    log INFO "=== ${SCRIPT_NAME} Installation Completed ==="
+}
+
+#############################################################################
+# Post-Install Commands                                                     #
+#############################################################################
+
+cmd_status() {
+    print_header "Nginx Proxy Manager Status"
+    
+    # Read config from .env if it exists
+    local admin_port="unknown"
+    if [[ -f "$WORK_DIR/.env" ]]; then
+        admin_port=$(grep '^NPM_ADMIN_PORT=' "$WORK_DIR/.env" 2>/dev/null | cut -d= -f2) || true
+    fi
+    
+    local ip_address
+    ip_address=$(get_local_ip)
+    
+    print_kv "Script Version" "$SCRIPT_VERSION"
+    print_kv "Working Directory" "$WORK_DIR"
+    echo
+    
+    # Container status
+    print_header "Container Status"
+    if docker info >/dev/null 2>&1; then
+        cd "$WORK_DIR" && docker compose ps 2>/dev/null || print_warning "Could not get container status"
+    else
+        cd "$WORK_DIR" && sudo docker compose ps 2>/dev/null || print_warning "Could not get container status"
+    fi
+    
+    echo
+    print_header "Access Information"
+    print_kv "Admin URL" "http://${ip_address}:${admin_port}"
+    print_kv "HTTP Proxy" "http://${ip_address}:80"
+    print_kv "HTTPS Proxy" "https://${ip_address}:443"
+    
+    echo
+}
+
+cmd_logs() {
+    local lines="${1:-50}"
+    
+    print_header "NPM Logs (last $lines lines)"
+    echo
+    
+    if docker info >/dev/null 2>&1; then
+        cd "$WORK_DIR" && docker compose logs --tail="$lines"
+    else
+        cd "$WORK_DIR" && sudo docker compose logs --tail="$lines"
+    fi
+}
+
+cmd_configure() {
+    # Verify sudo access
+    if ! sudo -v 2>/dev/null; then
+        die "This operation requires sudo privileges"
+    fi
+    
+    print_header "Reconfigure NPM"
+    
+    if [[ ! -f "$WORK_DIR/docker-compose.yml" ]]; then
+        die "NPM is not installed (no docker-compose.yml found)"
+    fi
+    
+    print_warning "This will replace the current configuration."
+    
+    if ! is_silent; then
+        echo
+        while true; do
+            echo -n "${C_BOLD}${C_CYAN}Continue? ${C_RESET}${C_DIM}(yes/no)${C_RESET} "
+            read -r choice
+            choice=$(echo "$choice" | tr '[:upper:]' '[:lower:]')
+            
+            case "$choice" in
+                yes|y) break ;;
+                no|n)
+                    print_info "Reconfiguration cancelled"
+                    exit 0
+                    ;;
+                *) print_error "Invalid input. Please enter 'yes' or 'no'" ;;
+            esac
+        done
+    fi
+    
+    # Re-run configuration
+    get_user_configuration
+    create_env_file
+    
+    # Restart stack with new config
+    print_step "Restarting NPM stack..."
+    if docker info >/dev/null 2>&1; then
+        cd "$WORK_DIR" && docker compose up -d
+    else
+        cd "$WORK_DIR" && sudo docker compose up -d
+    fi
+    
+    log SUCCESS "Configuration updated successfully"
+}
+
+cmd_uninstall() {
+    # Verify sudo access
+    if ! sudo -v 2>/dev/null; then
+        die "This operation requires sudo privileges"
+    fi
+    
+    print_header "Uninstall Nginx Proxy Manager"
+    
+    if [[ ! -d "$WORK_DIR" ]]; then
+        print_info "NPM is not installed (directory ~/npm not found)"
+        exit 0
+    fi
+    
+    print_warning "This will remove:"
+    print_subheader "Docker containers and images"
+    print_subheader "NPM directory (~/$WORK_DIR)"
+    print_subheader "Database and configuration"
+    print_subheader "SSL certificates"
+    
+    if ! is_silent; then
+        echo
+        while true; do
+            echo -n "${C_BOLD}${C_RED}Are you sure? ${C_RESET}${C_DIM}(yes/no)${C_RESET} "
+            read -r choice
+            choice=$(echo "$choice" | tr '[:upper:]' '[:lower:]')
+            
+            case "$choice" in
+                yes|y) break ;;
+                no|n)
+                    print_info "Uninstall cancelled"
+                    exit 0
+                    ;;
+                *) print_error "Invalid input. Please enter 'yes' or 'no'" ;;
+            esac
+        done
+    fi
+    
+    # Stop and remove containers
+    print_step "Stopping containers..."
+    if docker info >/dev/null 2>&1; then
+        cd "$WORK_DIR" && docker compose down --remove-orphans 2>/dev/null || true
+    else
+        cd "$WORK_DIR" && sudo docker compose down --remove-orphans 2>/dev/null || true
+    fi
+    
+    # Remove NPM directory
+    print_step "Removing NPM directory..."
+    cd "$HOME"
+    rm -rf "$WORK_DIR"
+    
+    # Remove firewall rules (only if UFW active)
+    if sudo ufw status 2>/dev/null | grep -q "Status: active"; then
+        print_step "Removing firewall rules..."
+        sudo ufw delete allow 80/tcp 2>/dev/null || true
+        sudo ufw delete allow 443/tcp 2>/dev/null || true
+        # Try to remove admin port rule if .env was readable
+        # (already removed with directory, so best-effort only)
+    fi
+    
+    log SUCCESS "Nginx Proxy Manager has been removed"
+    echo
 }
 
 #############################################################################
@@ -1069,45 +1445,80 @@ trap cleanup EXIT INT TERM
 #############################################################################
 
 main() {
+    # Handle post-install commands
+    case "${1:-}" in
+        --status)    cmd_status; exit 0 ;;
+        --logs)      cmd_logs "${2:-50}"; exit 0 ;;
+        --configure) cmd_configure; exit 0 ;;
+        --uninstall) cmd_uninstall; exit 0 ;;
+        --version|-v) echo "${SCRIPT_NAME}.sh v${SCRIPT_VERSION}"; exit 0 ;;
+        "") ;;  # Continue with installation
+        *) die "Unknown option: $1 (use --help for usage)" ;;
+    esac
+    
+    # Early sudo check (before logging)
+    if ! command_exists sudo; then
+        echo "ERROR: sudo is not installed" >&2
+        exit 1
+    fi
+    if [[ ${EUID} -eq 0 ]]; then
+        echo "ERROR: Do not run as root" >&2
+        exit 1
+    fi
+    if ! sudo -v 2>/dev/null; then
+        echo "ERROR: No sudo privileges" >&2
+        exit 1
+    fi
+    
+    # Check if already installed (idempotency)
+    if [[ -d "$HOME/npm" ]] && [[ -f "$HOME/npm/docker-compose.yml" ]]; then
+        # Clear screen if running directly
+        [[ "${BASH_SOURCE[0]}" == "${0}" ]] && clear || true
+        
+        draw_box "Nginx Proxy Manager — Already Installed"
+        echo
+        print_warning "NPM directory already exists: ~/npm"
+        
+        echo
+        print_header "Management Commands"
+        printf "  %b\n" "${C_DIM}# Check status${C_RESET}"
+        printf "  %b\n" "${C_CYAN}./npm-docker.sh --status${C_RESET}"
+        echo
+        printf "  %b\n" "${C_DIM}# View logs${C_RESET}"
+        printf "  %b\n" "${C_CYAN}./npm-docker.sh --logs${C_RESET}"
+        echo
+        printf "  %b\n" "${C_DIM}# Reconfigure${C_RESET}"
+        printf "  %b\n" "${C_CYAN}./npm-docker.sh --configure${C_RESET}"
+        echo
+        printf "  %b\n" "${C_DIM}# Restart stack${C_RESET}"
+        printf "  %b\n" "${C_CYAN}cd ~/npm && sudo docker compose restart${C_RESET}"
+        echo
+        printf "  %b\n" "${C_DIM}# Update containers${C_RESET}"
+        printf "  %b\n" "${C_CYAN}cd ~/npm && sudo docker compose pull && sudo docker compose up -d${C_RESET}"
+        echo
+        printf "  %b\n" "${C_DIM}# Uninstall${C_RESET}"
+        printf "  %b\n" "${C_CYAN}./npm-docker.sh --uninstall${C_RESET}"
+        echo
+        
+        print_info "To reinstall, first remove the existing installation:"
+        printf "  %b\n" "${C_CYAN}./npm-docker.sh --uninstall${C_RESET}"
+        echo
+        exit 0
+    fi
+    
+    # Handle incomplete installation
+    if [[ -d "$HOME/npm" ]]; then
+        print_warning "Incomplete NPM installation detected (missing docker-compose.yml)"
+        print_info "To clean up and reinstall:"
+        printf "  %b\n" "${C_CYAN}rm -rf ~/npm && ./npm-docker.sh${C_RESET}"
+        echo
+        exit 0
+    fi
+    
     # Clear screen if running directly
     [[ "${BASH_SOURCE[0]}" == "${0}" ]] && clear || true
     
     draw_box "Nginx Proxy Manager Installer v${SCRIPT_VERSION}"
-    
-    # Check if NPM directory already exists
-    if [[ -d "$HOME/npm" ]]; then
-        echo
-        print_warning "NPM directory already exists: ~/npm"
-        echo
-        
-        # Check if it's a complete installation
-        if [[ -f "$HOME/npm/docker-compose.yml" ]]; then
-            print_header "Management Commands"
-            printf "  %b\n" "${C_DIM}# View status${C_RESET}"
-            printf "  %b\n" "${C_CYAN}cd ~/npm && sudo docker compose ps${C_RESET}"
-            echo
-            printf "  %b\n" "${C_DIM}# View logs${C_RESET}"
-            printf "  %b\n" "${C_CYAN}cd ~/npm && sudo docker compose logs -f${C_RESET}"
-            echo
-            printf "  %b\n" "${C_DIM}# Restart stack${C_RESET}"
-            printf "  %b\n" "${C_CYAN}cd ~/npm && sudo docker compose restart${C_RESET}"
-            echo
-            printf "  %b\n" "${C_DIM}# Update containers${C_RESET}"
-            printf "  %b\n" "${C_CYAN}cd ~/npm && sudo docker compose pull && sudo docker compose up -d${C_RESET}"
-            echo
-            printf "  %b\n" "${C_DIM}# Edit configuration${C_RESET}"
-            printf "  %b\n" "${C_CYAN}nano ~/npm/.env${C_RESET}"
-        else
-            print_warning "Incomplete installation detected (missing docker-compose.yml)"
-        fi
-        
-        echo
-        print_info "To reinstall, first remove the existing installation:"
-        printf "  %b\n" "${C_CYAN}cd ~ && sudo docker compose -f ~/npm/docker-compose.yml down 2>/dev/null; sudo rm -rf ~/npm${C_RESET}"
-        printf "  %b\n" "${C_CYAN}./npm-docker.sh${C_RESET}"
-        echo
-        exit 0
-    fi
     
     # Setup logging
     setup_logging

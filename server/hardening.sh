@@ -4,14 +4,27 @@
 # Debian 13 VM/LXC Server Hardening Script                                  #
 #############################################################################
 
-readonly SCRIPT_VERSION="2.5.0"
+readonly SCRIPT_VERSION="3.0.0"
+readonly SCRIPT_NAME="hardening"
 
 # Handle --help flag early (before defining functions)
 case "${1:-}" in
     --help|-h)
         echo "Debian Server Hardening Script v${SCRIPT_VERSION}"
         echo
-        echo "Usage: $0 [--help]"
+        echo "Usage: $0 [COMMAND]"
+        echo
+        echo "Commands:"
+        echo "  (no args)     Install / harden the system (default)"
+        echo "  --help, -h    Show this help and exit"
+        echo "  --status      Show hardening and service status"
+        echo "  --logs [N]    Show recent log entries (default: 50)"
+        echo "  --version, -v Print version and exit"
+        echo
+        echo "Environment variables:"
+        echo "  HARDENING_SILENT=true       Skip all interactive prompts"
+        echo "  HARDENING_SKIP_UFW=true     Skip firewall configuration"
+        echo "  HARDENING_SKIP_APPS=true    Skip app installation menu"
         echo
         echo "Installation:"
         echo "  bootstrap.sh → Select \"Harden Debian System\""
@@ -30,12 +43,12 @@ case "${1:-}" in
         echo "  - Offers app installation menu (Docker, NPM, Unbound, etc.)"
         echo
         echo "Files created:"
-        echo "  /var/log/hardening-*.log                        Installation log"
-        echo "  /root/hardening-backups-*/                      Config backups"
-        echo "  /etc/ssh/sshd_config.d/99-lab-hardening.conf    SSH hardening"
-        echo "  /etc/fail2ban/jail.d/99-lab-hardening.conf      Fail2Ban config"
-        echo "  /etc/sysctl.d/99-lab-hardening.conf             Sysctl hardening"
-        echo "  /etc/apt/apt.conf.d/52lab-unattended-upgrades   Auto-updates config"
+        echo "  /var/log/lab/hardening-*.log                      Installation log"
+        echo "  /root/hardening-backups-*/                        Config backups"
+        echo "  /etc/ssh/sshd_config.d/99-lab-hardening.conf      SSH hardening"
+        echo "  /etc/fail2ban/jail.d/99-lab-hardening.conf        Fail2Ban config"
+        echo "  /etc/sysctl.d/99-lab-hardening.conf               Sysctl hardening"
+        echo "  /etc/apt/apt.conf.d/52lab-unattended-upgrades     Auto-updates config"
         echo
         echo "Available apps (via menu):"
         echo "  - Docker + Compose v2"
@@ -46,6 +59,10 @@ case "${1:-}" in
         echo "  - Samba File Server"
         echo "  - BookStack Wiki"
         echo "  - BentoPDF"
+        exit 0
+        ;;
+    --version|-v)
+        echo "${SCRIPT_NAME}.sh version ${SCRIPT_VERSION}"
         exit 0
         ;;
 esac
@@ -67,6 +84,7 @@ esac
 #############################################################################
 
 set -euo pipefail  # Exit on error, undefined vars, pipe failures
+export DEBIAN_FRONTEND=noninteractive
 
 #############################################################################
 # Script Configuration                                                      #
@@ -86,22 +104,17 @@ UNATTENDED_UPGRADES_WAS_ACTIVE=false
 if [[ -t 1 ]] && command -v tput >/dev/null 2>&1 && tput setaf 1 >/dev/null 2>&1; then
     COLORS_SUPPORTED=true
     
-    # Colors
     readonly C_RESET=$(tput sgr0)
     readonly C_BOLD=$(tput bold)
     readonly C_DIM=$(tput dim)
     
-    # Foreground colors
-    readonly C_BLACK=$(tput setaf 0)
     readonly C_RED=$(tput setaf 1)
     readonly C_GREEN=$(tput setaf 2)
     readonly C_YELLOW=$(tput setaf 3)
     readonly C_BLUE=$(tput setaf 4)
-    readonly C_MAGENTA=$(tput setaf 5)
     readonly C_CYAN=$(tput setaf 6)
     readonly C_WHITE=$(tput setaf 7)
     
-    # Bright colors (if supported)
     readonly C_BRIGHT_GREEN=$(tput setaf 10 2>/dev/null || tput setaf 2)
     readonly C_BRIGHT_RED=$(tput setaf 9 2>/dev/null || tput setaf 1)
     readonly C_BRIGHT_YELLOW=$(tput setaf 11 2>/dev/null || tput setaf 3)
@@ -111,12 +124,10 @@ else
     readonly C_RESET=""
     readonly C_BOLD=""
     readonly C_DIM=""
-    readonly C_BLACK=""
     readonly C_RED=""
     readonly C_GREEN=""
     readonly C_YELLOW=""
     readonly C_BLUE=""
-    readonly C_MAGENTA=""
     readonly C_CYAN=""
     readonly C_WHITE=""
     readonly C_BRIGHT_GREEN=""
@@ -140,6 +151,17 @@ else
     readonly SYMBOL_INFO="i"
     readonly SYMBOL_ARROW=">"
     readonly SYMBOL_BULLET="*"
+fi
+
+#############################################################################
+# Spinner (Optional - For Long-Running Operations)                         #
+#############################################################################
+
+# Spinner characters (with ASCII fallback for non-UTF-8 terminals)
+if [[ "${LANG:-}" =~ UTF-8 ]] || [[ "${LC_ALL:-}" =~ UTF-8 ]]; then
+    readonly SPINNER_CHARS='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+else
+    readonly SPINNER_CHARS='|/-\'
 fi
 
 #############################################################################
@@ -171,12 +193,14 @@ print_step() {
     echo "${C_CYAN}${C_BOLD}${SYMBOL_ARROW}${C_RESET} ${C_CYAN}${msg}${C_RESET}"
 }
 
-print_header() {
+print_section() {
     local msg="$*"
     echo
-    echo "${C_BOLD}${C_CYAN}━━━ ${msg} ━━━${C_RESET}"
+    echo "${C_BOLD}${C_WHITE}═══ ${msg} ═══${C_RESET}"
+    echo
 }
 
+# Hardening-specific output helpers
 print_subheader() {
     local msg="$*"
     echo "${C_DIM}${SYMBOL_BULLET} ${msg}${C_RESET}"
@@ -193,74 +217,264 @@ print_kv() {
 #############################################################################
 
 draw_box() {
-    local text="$1"
-    local width=68
-    local padding=$(( (width - ${#text} - 2) / 2 ))
+    local title="$1"
+    shift
+    local lines=("$@")
     
-    echo "${C_CYAN}"
-    echo "╔$(printf '═%.0s' $(seq 1 $width))╗"
-    printf "║%*s%s%*s║\n" $padding "" "$text" $padding ""
-    echo "╚$(printf '═%.0s' $(seq 1 $width))╝"
-    echo "${C_RESET}"
+    # Calculate max width
+    local max_width=0
+    for line in "${lines[@]}"; do
+        local stripped_line
+        stripped_line=$(echo "$line" | sed -r 's/\x1B\[[0-9;]*[mK]//g')
+        [[ ${#stripped_line} -gt $max_width ]] && max_width=${#stripped_line}
+    done
+    
+    # Ensure minimum width for title
+    [[ ${#title} -gt $max_width ]] && max_width=${#title}
+    
+    local box_width=$((max_width + 4))
+    local border
+    border=$(printf '═%.0s' $(seq 1 $box_width))
+    
+    # Top border
+    echo "${C_CYAN}╔${border}╗${C_RESET}"
+    
+    # Title (centered)
+    if [[ -n "$title" ]]; then
+        local title_padding=$(( (box_width - ${#title}) / 2 ))
+        local title_line
+        title_line=$(printf "%-${box_width}s" "$(printf "%${title_padding}s")${title}")
+        echo "${C_CYAN}║${C_RESET} ${C_BOLD}${C_WHITE}${title_line}${C_RESET} ${C_CYAN}║${C_RESET}"
+        echo "${C_CYAN}╠${border}╣${C_RESET}"
+    fi
+    
+    # Content lines
+    for line in "${lines[@]}"; do
+        local stripped_line
+        stripped_line=$(echo "$line" | sed -r 's/\x1B\[[0-9;]*[mK]//g')
+        local padding=$((box_width - ${#stripped_line}))
+        local padded_line="${line}$(printf ' %.0s' $(seq 1 $padding))"
+        echo "${C_CYAN}║${C_RESET} ${padded_line} ${C_CYAN}║${C_RESET}"
+    done
+    
+    # Bottom border
+    echo "${C_CYAN}╚${border}╝${C_RESET}"
 }
 
 draw_separator() {
-    echo "${C_DIM}$(printf '─%.0s' $(seq 1 70))${C_RESET}"
+    local char="${1:-─}"
+    local width="${2:-80}"
+    printf "${C_CYAN}%${width}s${C_RESET}\n" | tr ' ' "$char"
 }
 
 #############################################################################
-# Logging                                                                   #
+# Logging Functions                                                         #
 #############################################################################
 
+# Strip ANSI codes for clean log files
+strip_ansi() {
+    echo "$1" | sed -r 's/\x1B\[[0-9;]*[mK]//g'
+}
+
+# Unified logging function
 log() {
     local level="$1"
     shift
-    local message="$*"
-    local timestamp=$(date +"%Y-%m-%d %H:%M:%S")
+    local msg="$*"
+    local timestamp
+    timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    local stripped_msg
+    stripped_msg=$(strip_ansi "$msg")
     
-    # Write plain text to log file (strip ANSI color codes)
-    if [[ -n "${LOG_FILE:-}" ]] && [[ -w "${LOG_FILE:-}" || -w "$(dirname "${LOG_FILE:-/tmp}")" ]]; then
-        echo "[$timestamp] [$level] $message" | sed 's/\x1b\[[0-9;]*m//g' >> "$LOG_FILE" 2>/dev/null || true
+    # Append to log file (if LOG_FILE is set)
+    if [[ -n "${LOG_FILE:-}" ]]; then
+        echo "[${timestamp}] [${level}] ${stripped_msg}" >> "${LOG_FILE}" 2>/dev/null || true
     fi
     
     # Display to console with formatting
     case "$level" in
-        SUCCESS) print_success "$message" ;;
-        ERROR)   print_error "$message" ;;
-        WARN)    print_warning "$message" ;;
-        INFO)    print_info "$message" ;;
-        STEP)    print_step "$message" ;;
-        *)       echo "$message" ;;
+        SUCCESS) print_success "$msg" ;;
+        ERROR)   print_error "$msg" ;;
+        WARN)    print_warning "$msg" ;;
+        INFO)    print_info "$msg" ;;
+        STEP)    print_step "$msg" ;;
+        *)       echo "$msg" ;;
     esac
 }
 
+# Fatal error handler
 die() {
-    print_error "$@"
+    local msg="$*"
+    print_error "$msg"
+    log ERROR "$msg"
     exit 1
 }
 
-# Error trap for better debugging (set after print_error is defined)
-trap 'print_error "Error on line $LINENO: $BASH_COMMAND"' ERR
+# Setup logging directory and file
+setup_logging() {
+    if [[ ! -d "$LOG_DIR" ]]; then
+        sudo mkdir -p "$LOG_DIR" || {
+            print_error "Failed to create log directory: $LOG_DIR"
+            exit 1
+        }
+        sudo chmod 755 "$LOG_DIR"
+    fi
+    
+    # Create log file (as current user)
+    if ! touch "$LOG_FILE" 2>/dev/null; then
+        if ! sudo touch "$LOG_FILE"; then
+            print_error "Failed to create log file: $LOG_FILE"
+            exit 1
+        fi
+        sudo chown "$(whoami):$(whoami)" "$LOG_FILE"
+    fi
+    
+    chmod 644 "$LOG_FILE" 2>/dev/null || true
+    
+    log INFO "=== ${SCRIPT_NAME}.sh v${SCRIPT_VERSION} started ==="
+    log INFO "Executed by: $(whoami)"
+    log INFO "Host: $(hostname)"
+    log INFO "Date: $(date)"
+}
 
 #############################################################################
-# Cleanup / Restore Services                                                #
+# Helper Functions                                                          #
+#############################################################################
+
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+service_is_active() {
+    systemctl is-active --quiet "$1" 2>/dev/null
+}
+
+is_silent() {
+    [[ "${HARDENING_SILENT:-false}" == "true" ]]
+}
+
+# Get local IP (primary interface)
+get_local_ip() {
+    local ip
+    
+    # Try ip route first (most reliable)
+    ip=$(ip -4 route get 8.8.8.8 2>/dev/null | grep -oP 'src \K[0-9.]+')
+    
+    # Fallback to hostname -I (first IP)
+    if [[ -z "$ip" ]]; then
+        ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+    fi
+    
+    # Final fallback
+    if [[ -z "$ip" ]]; then
+        ip="<IP>"
+    fi
+    
+    echo "$ip"
+}
+
+#############################################################################
+# Spinner Function                                                          #
+#############################################################################
+
+# Run a command with an animated spinner, elapsed timer, and log capture.
+# All command output is redirected to LOG_FILE. Console shows a spinner
+# that resolves to ✓/✗ on completion with elapsed time.
+#
+# Usage:
+#   run_with_spinner "Message" command arg1 arg2...
+
+run_with_spinner() {
+    local msg="$1"
+    shift
+    local pid tmp_out exit_code=0
+    local spin_idx=0 start_ts now_ts elapsed
+
+    # Skip spinner in non-interactive mode
+    if ! [[ -t 1 ]] || is_silent; then
+        print_step "$msg"
+        log STEP "$msg"
+        if "$@"; then
+            print_success "Done"
+            log SUCCESS "$msg - completed"
+            return 0
+        else
+            print_error "Failed"
+            log ERROR "$msg - failed"
+            return 1
+        fi
+    fi
+
+    tmp_out="$(mktemp)" || { log WARN "mktemp failed, running without spinner"; "$@"; return $?; }
+    start_ts="$(date +%s)"
+
+    log STEP "$msg" 2>/dev/null || true
+
+    # Run command in background, capture all output
+    "$@" >"$tmp_out" 2>&1 &
+    pid=$!
+
+    # Show spinner while command runs (no color codes — avoids glyph artifacts)
+    printf "  %s " "$msg"
+    while kill -0 "$pid" 2>/dev/null; do
+        now_ts="$(date +%s)"
+        elapsed=$((now_ts - start_ts))
+        printf "\r  %s %s (%ds)" "$msg" "${SPINNER_CHARS:spin_idx++%${#SPINNER_CHARS}:1}" "$elapsed"
+        sleep 0.1
+    done
+
+    # Capture exit code (|| prevents set -e from killing before cleanup)
+    wait "$pid" || exit_code=$?
+
+    # Append command output to log file
+    if [[ -n "${LOG_FILE:-}" ]] && [[ -w "${LOG_FILE:-}" ]]; then
+        cat "$tmp_out" >> "$LOG_FILE" 2>/dev/null || true
+    fi
+    rm -f "$tmp_out"
+
+    # Show result with elapsed time (colors only on final line)
+    now_ts="$(date +%s)"
+    elapsed=$((now_ts - start_ts))
+    if [[ $exit_code -eq 0 ]]; then
+        printf "\r  %s %s (%ds)\n" "$msg" "${C_GREEN}${SYMBOL_SUCCESS}${C_RESET}" "$elapsed"
+    else
+        printf "\r  %s %s (%ds)\n" "$msg" "${C_RED}${SYMBOL_ERROR}${C_RESET}" "$elapsed"
+    fi
+
+    return $exit_code
+}
+
+# Error trap for better debugging
+trap 'log ERROR "Command failed at line $LINENO: $BASH_COMMAND"' ERR
+
+#############################################################################
+# Cleanup Handler                                                           #
 #############################################################################
 
 cleanup() {
     local exit_code=$?
     
-    # Restore unattended-upgrades if we stopped it
-    if [[ "$UNATTENDED_UPGRADES_WAS_ACTIVE" == true ]]; then
-        if sudo systemctl start unattended-upgrades 2>/dev/null; then
-            print_info "Restored unattended-upgrades service"
-        fi
+    # Restart unattended-upgrades if we stopped it
+    if [[ "$UNATTENDED_UPGRADES_WAS_ACTIVE" == "true" ]]; then
+        sudo systemctl start unattended-upgrades 2>/dev/null || true
     fi
     
-    exit $exit_code
+    # Write to log file only (no console output during cleanup)
+    if [[ -n "${LOG_FILE:-}" ]]; then
+        local timestamp
+        timestamp=$(date '+%Y-%m-%d %H:%M:%S') 2>/dev/null || true
+        if [[ $exit_code -eq 0 ]]; then
+            echo "[${timestamp}] [INFO] === Script finished (exit 0) ===" >> "${LOG_FILE}" 2>/dev/null || true
+        else
+            echo "[${timestamp}] [ERROR] === Script failed (exit ${exit_code}) ===" >> "${LOG_FILE}" 2>/dev/null || true
+        fi
+    fi
 }
 
-# Register cleanup on exit (normal or error)
+# EXIT runs cleanup on any exit. INT/TERM exit immediately (which triggers EXIT).
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 #################################################################
 # Application Registry - ADD NEW APPS HERE                      #
@@ -288,11 +502,108 @@ readonly APPS_BASE_URL="https://raw.githubusercontent.com/vdarkobar/lab/main/app
 # Configuration                                                  #
 #################################################################
 
-readonly LOG_FILE="/var/log/hardening-$(date +%Y%m%d-%H%M%S).log"
+readonly LOG_DIR="/var/log/lab"
+readonly LOG_FILE="${LOG_DIR}/${SCRIPT_NAME}-$(date +%Y%m%d-%H%M%S).log"
 readonly BACKUP_DIR="/root/hardening-backups-$(date +%Y%m%d-%H%M%S)"
 
 # Hardening marker files (used for detection)
 readonly HARDENING_MARKER="/etc/ssh/sshd_config.d/99-lab-hardening.conf"
+
+#################################################################
+# CLI Commands                                                   #
+#################################################################
+
+cmd_status() {
+    echo
+    draw_box "Hardening Status" \
+        "Script: ${SCRIPT_NAME}.sh v${SCRIPT_VERSION}" \
+        "Host:   $(hostname)" \
+        "IP:     $(get_local_ip)"
+    echo
+    
+    print_section "Configuration Files"
+    
+    if [[ -f /etc/ssh/sshd_config.d/99-lab-hardening.conf ]]; then
+        print_success "SSH hardening configured"
+    else
+        print_warning "SSH hardening not found"
+    fi
+    
+    if [[ -f /etc/fail2ban/jail.d/99-lab-hardening.conf ]]; then
+        print_success "Fail2Ban configured"
+    else
+        print_warning "Fail2Ban config not found"
+    fi
+    
+    if [[ -f /etc/sysctl.d/99-lab-hardening.conf ]]; then
+        print_success "Sysctl hardening configured"
+    else
+        print_warning "Sysctl hardening not found"
+    fi
+    
+    if [[ -f /etc/apt/apt.conf.d/52lab-unattended-upgrades ]]; then
+        print_success "Unattended-upgrades configured"
+    else
+        print_warning "Unattended-upgrades config not found"
+    fi
+    
+    print_section "Service Status"
+    
+    service_is_active sshd 2>/dev/null || service_is_active ssh 2>/dev/null && \
+        print_success "SSH: running" || print_warning "SSH: not running"
+    service_is_active fail2ban && \
+        print_success "Fail2Ban: running" || print_warning "Fail2Ban: not running"
+    
+    # Check UFW status
+    local ufw_cmd
+    if command_exists ufw; then
+        ufw_cmd="ufw"
+    elif [[ -x /usr/sbin/ufw ]]; then
+        ufw_cmd="/usr/sbin/ufw"
+    fi
+    
+    if [[ -n "${ufw_cmd:-}" ]]; then
+        if sudo "$ufw_cmd" status 2>/dev/null | grep -q "Status: active"; then
+            print_success "UFW: active"
+        else
+            print_warning "UFW: inactive"
+        fi
+    else
+        print_warning "UFW: not installed"
+    fi
+    
+    service_is_active unattended-upgrades && \
+        print_success "Unattended-upgrades: running" || print_warning "Unattended-upgrades: not running"
+    
+    print_section "Management"
+    echo "  ${SCRIPT_NAME}.sh --status      Show this status"
+    echo "  ${SCRIPT_NAME}.sh --logs [N]    Show recent log entries"
+    echo "  ${SCRIPT_NAME}.sh --help        Show full help"
+    echo
+}
+
+cmd_logs() {
+    local lines="${1:-50}"
+    local log_dir="/var/log/lab"
+    
+    # Find the most recent hardening log
+    local latest_log
+    latest_log=$(ls -t "${log_dir}/${SCRIPT_NAME}"-*.log 2>/dev/null | head -1)
+    
+    if [[ -z "$latest_log" ]]; then
+        # Fall back to legacy log location
+        latest_log=$(ls -t /var/log/hardening-*.log 2>/dev/null | head -1)
+    fi
+    
+    if [[ -z "$latest_log" ]]; then
+        print_warning "No hardening log files found"
+        return 1
+    fi
+    
+    print_info "Log file: $latest_log"
+    echo
+    tail -n "$lines" "$latest_log"
+}
 
 #################################################################
 # Previous Run Detection                                         #
@@ -307,11 +618,11 @@ check_previous_hardening() {
 }
 
 show_already_hardened_menu() {
-    clear
+    # Banner already displayed at start of main()
     draw_box "System Already Hardened"
     
     echo
-    print_header "Detected Hardening"
+    print_section "Detected Hardening"
     
     # Show which hardening configs exist
     [[ -f /etc/ssh/sshd_config.d/99-lab-hardening.conf ]] && print_success "SSH hardening configured"
@@ -320,21 +631,39 @@ show_already_hardened_menu() {
     
     # Check service status
     echo
-    print_header "Service Status"
-    systemctl is-active --quiet sshd 2>/dev/null && print_success "SSH: running" || print_warning "SSH: not running"
-    systemctl is-active --quiet fail2ban 2>/dev/null && print_success "Fail2Ban: running" || print_warning "Fail2Ban: not running"
-    sudo ufw status 2>/dev/null | grep -q "Status: active" && print_success "UFW: active" || print_warning "UFW: inactive"
+    print_section "Service Status"
+    service_is_active sshd 2>/dev/null || service_is_active ssh 2>/dev/null && \
+        print_success "SSH: running" || print_warning "SSH: not running"
+    service_is_active fail2ban && \
+        print_success "Fail2Ban: running" || print_warning "Fail2Ban: not running"
+    
+    local ufw_cmd
+    if command_exists ufw; then
+        ufw_cmd="ufw"
+    elif [[ -x /usr/sbin/ufw ]]; then
+        ufw_cmd="/usr/sbin/ufw"
+    fi
+    if [[ -n "${ufw_cmd:-}" ]]; then
+        sudo "$ufw_cmd" status 2>/dev/null | grep -q "Status: active" && \
+            print_success "UFW: active" || print_warning "UFW: inactive"
+    else
+        print_warning "UFW: not installed"
+    fi
     
     echo
     print_info "Hardening steps will be skipped"
     print_info "You can install additional applications below"
     echo
     
-    # Offer app menu
-    if show_app_menu; then
-        log SUCCESS "Application installation completed"
-    else
-        print_info "No application selected"
+    # Offer app menu (unless silent or skipped)
+    if [[ "${HARDENING_SKIP_APPS:-false}" != "true" ]]; then
+        if ! is_silent; then
+            if show_app_menu; then
+                log SUCCESS "Application installation completed"
+            else
+                print_info "No application selected"
+            fi
+        fi
     fi
     
     echo
@@ -347,7 +676,17 @@ show_already_hardened_menu() {
 #################################################################
 
 preflight_checks() {
-    print_header "Pre-flight Checks"
+    print_section "Pre-flight Checks"
+    
+    # Refuse Proxmox host execution
+    if [[ -f /etc/pve/.version ]] || command -v pveversion &>/dev/null; then
+        die "This script must not run on the Proxmox VE host. Run inside a VM or LXC."
+    fi
+    
+    # Check systemd
+    if [[ ! -d /run/systemd/system ]]; then
+        die "This script requires systemd. Non-systemd environments are not supported."
+    fi
     
     # CRITICAL: Enforce non-root execution
     if [[ ${EUID} -eq 0 ]]; then
@@ -385,14 +724,15 @@ preflight_checks() {
     fi
     print_success "Sudo authentication successful"
     
-    # Check Debian version
+    # Check OS version
     if [[ -f /etc/os-release ]]; then
-        . /etc/os-release
+        source /etc/os-release
         if [[ "$ID" != "debian" ]]; then
             print_warning "This script is designed for Debian. Detected: $ID"
         else
             print_success "Debian system detected: $VERSION"
         fi
+        log INFO "OS: $PRETTY_NAME"
     else
         print_warning "Cannot determine OS version"
     fi
@@ -407,13 +747,13 @@ preflight_checks() {
     
     # Check internet connectivity (use HTTP instead of ICMP for container compatibility)
     print_step "Testing internet connectivity..."
-    if command -v curl >/dev/null 2>&1; then
+    if command_exists curl; then
         if curl -s --max-time 5 --head https://deb.debian.org >/dev/null 2>&1; then
             print_success "Internet connectivity verified (via curl)"
         else
             die "No internet connectivity detected (curl test failed)"
         fi
-    elif command -v wget >/dev/null 2>&1; then
+    elif command_exists wget; then
         if wget -q --timeout=5 --spider https://deb.debian.org 2>/dev/null; then
             print_success "Internet connectivity verified (via wget)"
         else
@@ -424,6 +764,16 @@ preflight_checks() {
         print_info "Assuming connectivity OK - will install curl in next step"
     fi
     
+    # Stop unattended-upgrades if running
+    if service_is_active unattended-upgrades; then
+        UNATTENDED_UPGRADES_WAS_ACTIVE=true
+        print_step "Stopping unattended-upgrades service..."
+        sudo systemctl stop unattended-upgrades
+        log INFO "Stopped unattended-upgrades service"
+    fi
+    
+    print_success "Pre-flight checks passed"
+    log SUCCESS "Pre-flight checks completed"
     echo
 }
 
@@ -432,10 +782,10 @@ preflight_checks() {
 #################################################################
 
 detect_environment() {
-    print_header "Environment Detection"
+    print_section "Environment Detection"
     
     # Detect virtualization type
-    if command -v systemd-detect-virt >/dev/null 2>&1; then
+    if command_exists systemd-detect-virt; then
         if systemd-detect-virt --container >/dev/null 2>&1; then
             CONTAINER_TYPE=$(systemd-detect-virt --container)
             IS_CONTAINER=true
@@ -477,13 +827,13 @@ detect_environment() {
 #################################################################
 
 detect_network_info() {
-    print_header "Network Configuration"
+    print_section "Network Configuration"
     
     # Get hostname
     HOSTNAME=$(hostname -s) || HOSTNAME="unknown"
     
     # Detect domain name
-    if command -v resolvectl >/dev/null 2>&1 && systemctl is-active --quiet systemd-resolved; then
+    if command_exists resolvectl && service_is_active systemd-resolved; then
         DOMAIN_LOCAL=$(resolvectl status | awk '/DNS Domain:/ {print $3; exit}' | head -n1)
     fi
     
@@ -495,16 +845,8 @@ detect_network_info() {
     # Final fallback
     DOMAIN_LOCAL=${DOMAIN_LOCAL:-"local"}
     
-    # Detect primary IP address
-    LOCAL_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
-    
-    # Fallback IP detection
-    if [[ -z "$LOCAL_IP" ]] || [[ "$LOCAL_IP" == "127.0.0.1" ]]; then
-        LOCAL_IP=$(ip -4 addr show scope global | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -n1)
-    fi
-    
-    # Final fallback
-    LOCAL_IP=${LOCAL_IP:-"127.0.0.1"}
+    # Detect primary IP address using standardized helper
+    LOCAL_IP=$(get_local_ip)
     
     print_kv "Hostname" "$HOSTNAME"
     print_kv "Domain" "$DOMAIN_LOCAL"
@@ -518,12 +860,8 @@ detect_network_info() {
 #################################################################
 
 show_intro() {
-    clear
-    
-    draw_box "Debian Server Hardening Script v${SCRIPT_VERSION}"
-    
-    echo
-    print_header "System Information"
+    # Banner already displayed at start of main()
+    print_section "System Information"
     print_kv "IP Address" "$LOCAL_IP"
     print_kv "Hostname" "$HOSTNAME"
     print_kv "Domain" "$DOMAIN_LOCAL"
@@ -531,7 +869,7 @@ show_intro() {
     print_kv "Executing User" "$(whoami)"
     
     echo
-    print_header "Hardening Steps"
+    print_section "Hardening Steps"
     print_subheader "Install security packages (UFW, Fail2Ban, etc.)"
     print_subheader "Configure firewall rules"
     print_subheader "Set up intrusion prevention"
@@ -541,7 +879,7 @@ show_intro() {
     print_subheader "Configure SSH key authentication"
     
     echo
-    print_header "Requirements"
+    print_section "Requirements"
     print_warning "Script must run as non-root user (currently: $(whoami))"
     print_warning "User must have sudo privileges (will prompt if needed)"
     print_warning "SSH public key required for authentication"
@@ -557,6 +895,12 @@ show_intro() {
 #################################################################
 
 confirm_start() {
+    # Skip in silent mode
+    if is_silent; then
+        log INFO "Silent mode: auto-confirming start"
+        return 0
+    fi
+    
     draw_separator
     echo
     while true; do
@@ -605,7 +949,7 @@ backup_file() {
         local backup_path="$BACKUP_DIR$(dirname "$file")"
         sudo mkdir -p "$backup_path"
         sudo cp -a "$file" "$backup_path/" || log WARN "Failed to backup $file"
-        log INFO "Backed up: ${C_DIM}${file}${C_RESET}"
+        log INFO "Backed up: ${file}"
     fi
 }
 
@@ -614,21 +958,18 @@ backup_file() {
 #################################################################
 
 install_packages() {
-    print_header "Installing Security Packages"
+    print_section "Installing Security Packages"
     
     # Stop unattended upgrades if running (track state to restart later)
-    if systemctl is-active --quiet unattended-upgrades 2>/dev/null; then
+    if service_is_active unattended-upgrades; then
         UNATTENDED_UPGRADES_WAS_ACTIVE=true
         sudo systemctl stop unattended-upgrades 2>/dev/null || true
         print_info "Temporarily stopped unattended-upgrades"
     fi
     
     # Update package lists
-    print_step "Updating package repositories..."
-    if ! sudo apt update >/dev/null 2>&1; then
-        die "Failed to update package repositories"
-    fi
-    print_success "Package lists updated"
+    run_with_spinner "Updating package repositories" sudo apt-get update \
+        || die "Failed to update package repositories"
     
     # Install packages
     local packages=(
@@ -648,13 +989,10 @@ install_packages() {
         cloud-initramfs-growroot
     )
     
-    print_step "Installing packages (1-2 minutes)..."
     print_subheader "${C_DIM}${packages[*]}${C_RESET}"
-    if ! sudo DEBIAN_FRONTEND=noninteractive apt install -y "${packages[@]}" >/dev/null 2>&1; then
-        die "Failed to install packages"
-    fi
+    run_with_spinner "Installing security packages" sudo apt-get install -y "${packages[@]}" \
+        || die "Failed to install packages"
     
-    log SUCCESS "All packages installed successfully"
     echo
 }
 
@@ -663,7 +1001,7 @@ install_packages() {
 #################################################################
 
 configure_hosts() {
-    print_header "Configuring System Hosts File"
+    print_section "Configuring System Hosts File"
     
     backup_file "/etc/hosts"
     
@@ -698,7 +1036,7 @@ configure_hosts() {
 #################################################################
 
 configure_unattended_upgrades() {
-    print_header "Configuring Automatic Security Updates"
+    print_section "Configuring Automatic Security Updates"
     
     # Enable unattended-upgrades
     print_step "Enabling unattended-upgrades..."
@@ -738,9 +1076,9 @@ EOF
 #################################################################
 
 configure_fail2ban() {
-    print_header "Configuring Fail2Ban Intrusion Prevention"
+    print_section "Configuring Fail2Ban Intrusion Prevention"
     
-    if ! command -v fail2ban-server >/dev/null 2>&1; then
+    if ! command_exists fail2ban-server; then
         die "Fail2Ban is not installed"
     fi
     
@@ -775,7 +1113,12 @@ EOF
     # Restart Fail2Ban to apply changes
     print_step "Restarting Fail2Ban service..."
     if sudo systemctl restart fail2ban; then
-        log SUCCESS "Fail2Ban configured and running"
+        sleep 1
+        if service_is_active fail2ban; then
+            log SUCCESS "Fail2Ban configured and running"
+        else
+            print_warning "Fail2Ban may not be running after restart"
+        fi
     else
         print_warning "Fail2Ban restart failed, may need manual intervention"
     fi
@@ -787,7 +1130,14 @@ EOF
 #################################################################
 
 configure_ufw() {
-    print_header "Configuring UFW Firewall"
+    print_section "Configuring UFW Firewall"
+    
+    # Skip if requested via environment variable
+    if [[ "${HARDENING_SKIP_UFW:-false}" == "true" ]]; then
+        print_warning "Skipping firewall configuration (HARDENING_SKIP_UFW=true)"
+        log WARN "Firewall configuration skipped by user request"
+        return 0
+    fi
     
     # Test if UFW can actually work by trying to reset it
     # This is more reliable than checking container privilege indicators
@@ -828,7 +1178,7 @@ configure_ufw() {
 #################################################################
 
 configure_sysctl() {
-    print_header "Applying Network Security Settings"
+    print_section "Applying Network Security Settings"
     
     local sysctl_file="/etc/sysctl.d/99-lab-hardening.conf"
     
@@ -887,7 +1237,19 @@ EOF
 #################################################################
 
 configure_ssh_keys() {
-    print_header "Configuring SSH Key Authentication"
+    print_section "Configuring SSH Key Authentication"
+    
+    # Skip in silent mode (key must be pre-configured)
+    if is_silent; then
+        local auth_keys="$HOME/.ssh/authorized_keys"
+        if [[ -f "$auth_keys" ]] && [[ -s "$auth_keys" ]]; then
+            print_success "SSH authorized_keys file exists (silent mode)"
+            log INFO "Silent mode: SSH key already configured"
+            return 0
+        else
+            die "Silent mode requires SSH key to be pre-configured in $auth_keys"
+        fi
+    fi
     
     local user=$(whoami)
     local ssh_dir="$HOME/.ssh"
@@ -966,7 +1328,7 @@ configure_ssh_keys() {
 #################################################################
 
 lock_root_account() {
-    print_header "Securing Root Account"
+    print_section "Securing Root Account"
     
     # Check if root is already locked
     if sudo passwd -S root | grep -q " L "; then
@@ -986,7 +1348,7 @@ lock_root_account() {
 #################################################################
 
 configure_sshd() {
-    print_header "Hardening SSH Configuration"
+    print_section "Hardening SSH Configuration"
     
     local sshd_config="/etc/ssh/sshd_config"
     local dropin_dir="/etc/ssh/sshd_config.d"
@@ -1090,7 +1452,7 @@ EOF
     
     if [[ -n "$svc" ]] && sudo systemctl restart "$svc"; then
         sleep 1
-        if systemctl is-active --quiet "$svc"; then
+        if service_is_active "$svc"; then
             log SUCCESS "SSH service restarted and running"
         else
             print_error "SSH service not active after restart, rolling back..."
@@ -1130,7 +1492,7 @@ check_app_installed() {
 #################################################################
 
 show_app_menu() {
-    print_header "Application Installation"
+    print_section "Application Installation"
     
     echo
     print_info "Available applications to install:"
@@ -1208,7 +1570,7 @@ install_app() {
     local checksums_file="${SCRIPT_DIR}/../CHECKSUMS.txt"
     local checksum_verified=false
     
-    print_header "Installing: $display_name"
+    print_section "Installing: $display_name"
     
     # Check if local script exists
     if [[ -f "$local_script" ]]; then
@@ -1279,7 +1641,7 @@ download_and_install_app() {
     local checksums_url="https://raw.githubusercontent.com/vdarkobar/lab/main/CHECKSUMS.txt"
     local tmp_checksums="/tmp/checksums-$RANDOM.txt"
     
-    print_header "Installing: $display_name (downloading)"
+    print_section "Installing: $display_name (downloading)"
     
     # Download script
     print_step "Downloading ${script_name}..."
@@ -1327,6 +1689,11 @@ download_and_install_app() {
     
     # If no checksum verification, ask user
     if [[ "$checksum_verified" == false ]]; then
+        if is_silent; then
+            rm -f "$tmp_script"
+            die "Silent mode: cannot execute unverified script"
+        fi
+        
         print_warning "Proceeding without verification (not recommended)"
         
         # Show what we're about to run
@@ -1383,10 +1750,11 @@ download_and_install_app() {
 
 show_summary() {
     echo
-    draw_box "Hardening Completed Successfully"
+    draw_box "Hardening Completed Successfully" \
+        "All security measures have been applied"
     
     echo
-    print_header "Summary"
+    print_section "Summary"
     print_success "Security packages installed and configured"
     print_success "Firewall (UFW) enabled and configured"
     print_success "Fail2Ban active for intrusion prevention"
@@ -1395,14 +1763,14 @@ show_summary() {
     print_success "System security settings applied"
     
     echo
-    print_header "Critical Next Steps"
+    print_section "Critical Next Steps"
     echo
     print_warning "Test SSH access from another terminal NOW"
     print_warning "Verify SSH key authentication works"
     print_warning "Do NOT close this session until verified"
     
     echo
-    print_header "Important Information"
+    print_section "Important Information"
     print_kv "Log File" "$LOG_FILE"
     print_kv "Backups" "$BACKUP_DIR"
     print_kv "FQDN" "$HOSTNAME.$DOMAIN_LOCAL"
@@ -1410,7 +1778,12 @@ show_summary() {
     print_kv "SSH User" "$(whoami)"
     
     echo
-    print_header "Next SSH Connection"
+    print_section "Management Commands"
+    echo "  ${C_CYAN}${C_BOLD}${SCRIPT_NAME}.sh --status${C_RESET}      Show hardening status"
+    echo "  ${C_CYAN}${C_BOLD}${SCRIPT_NAME}.sh --logs${C_RESET}        Show recent logs"
+    echo
+    
+    print_section "Next SSH Connection"
     echo "  ${C_CYAN}${C_BOLD}ssh $(whoami)@$LOCAL_IP${C_RESET}"
     echo
     
@@ -1423,11 +1796,26 @@ show_summary() {
 #################################################################
 
 main() {
+    # Show banner first — all output flows below it
+    [[ -t 1 ]] && ! is_silent && clear
+    echo
+    draw_box "Debian Server Hardening Script v${SCRIPT_VERSION}" \
+        "Secure your Debian 13 server"
+    echo
+
     # Early check: Verify sudo is available before we do anything
     if ! command -v sudo >/dev/null 2>&1; then
         echo "ERROR: sudo is not installed or not in PATH" >&2
         echo "This script requires sudo. Please install it first:" >&2
         echo "  apt update && apt install sudo" >&2
+        exit 1
+    fi
+    
+    # Refuse root execution early (before any sudo calls)
+    if [[ ${EUID} -eq 0 ]]; then
+        echo "ERROR: This script must NOT be run as root!" >&2
+        echo "Run as a regular user with sudo privileges:" >&2
+        echo "  ./$(basename "$0")" >&2
         exit 1
     fi
     
@@ -1446,18 +1834,8 @@ main() {
         exit 0
     fi
     
-    # Initialize logging - create file as root but give ownership to current user
-    sudo touch "$LOG_FILE" || {
-        echo "ERROR: Cannot create log file. Ensure you have sudo privileges." >&2
-        exit 1
-    }
-    sudo chown "$(whoami):$(id -gn)" "$LOG_FILE"
-    sudo chmod 644 "$LOG_FILE"
-    
-    log INFO "=== Server Hardening Script Started ==="
-    log INFO "Version: $SCRIPT_VERSION"
-    log INFO "User: $(whoami)"
-    log INFO "Date: $(date)"
+    # Initialize logging
+    setup_logging
     
     # Run checks and setup
     preflight_checks
@@ -1480,11 +1858,19 @@ main() {
     lock_root_account
     configure_sshd
     
-    # Show application installation menu
-    if show_app_menu; then
-        log SUCCESS "Application installation completed"
+    # Show application installation menu (unless skipped)
+    if [[ "${HARDENING_SKIP_APPS:-false}" != "true" ]] && ! is_silent; then
+        if show_app_menu; then
+            log SUCCESS "Application installation completed"
+        else
+            print_info "Application installation skipped"
+        fi
     else
-        print_info "Application installation skipped"
+        if is_silent; then
+            log INFO "Silent mode: skipping app installation menu"
+        else
+            log INFO "Application installation skipped (HARDENING_SKIP_APPS=true)"
+        fi
     fi
     
     # Show summary
@@ -1493,5 +1879,23 @@ main() {
     log INFO "=== Server Hardening Script Completed ==="
 }
 
-# Run main function
-main "$@"
+# Route CLI commands
+case "${1:-}" in
+    --status)
+        cmd_status
+        exit 0
+        ;;
+    --logs)
+        cmd_logs "${2:-50}"
+        exit 0
+        ;;
+    "")
+        # Default: install/harden
+        main
+        ;;
+    *)
+        echo "Unknown option: $1" >&2
+        echo "Run '$0 --help' for usage" >&2
+        exit 1
+        ;;
+esac

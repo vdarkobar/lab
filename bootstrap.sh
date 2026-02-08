@@ -6,7 +6,7 @@
 #                                                                           #
 # This script:                                                              #
 #   1. Creates directory structure (server/, apps/, pve/)                   #
-#   2. Downloads all components from GitHub                                 #
+#   2. Downloads all components from GitHub (including itself)              #
 #   3. Verifies checksums for security                                      #
 #   4. Presents menu to run setup scripts                                   #
 #                                                                           #
@@ -327,7 +327,7 @@ Secure Install (verified):
 
 WHAT IT DOES:
   - Creates directory structure: ~/lab/{server,apps,pve}
-  - Downloads all components from GitHub
+  - Downloads all components from GitHub (including bootstrap itself)
   - Verifies SHA256 checksums for security
   - Presents menu to run setup scripts (or runs directly with --options)
 
@@ -504,6 +504,8 @@ download_components() {
 
     # Files to download: path|display_name
     local files=(
+        "bootstrap.sh|Bootstrap Script (self)"
+        "bootstrap.sh.sha256|Bootstrap Checksum"
         "server/hardening.sh|Hardening Script"
         "server/jump.sh|Jump Server Script"
         "pve/debvm.sh|Debian VM Template Script"
@@ -599,6 +601,8 @@ verify_checksums() {
 
     # Check for downloaded files not in CHECKSUMS.txt
     local downloaded_files=(
+        "bootstrap.sh"
+        "bootstrap.sh.sha256"
         "server/hardening.sh"
         "server/jump.sh"
         "pve/debvm.sh"
@@ -798,9 +802,10 @@ show_summary() {
 
     echo
     print_section "Directory Structure"
-    echo "${C_DIM}${SYMBOL_BULLET} server/  - Server scripts (hardening, jump)${C_RESET}"
-    echo "${C_DIM}${SYMBOL_BULLET} apps/    - Application installers${C_RESET}"
-    echo "${C_DIM}${SYMBOL_BULLET} pve/     - Proxmox VE scripts${C_RESET}"
+    echo "${C_DIM}${SYMBOL_BULLET} bootstrap.sh - This script (archived copy)${C_RESET}"
+    echo "${C_DIM}${SYMBOL_BULLET} server/      - Server scripts (hardening, jump)${C_RESET}"
+    echo "${C_DIM}${SYMBOL_BULLET} apps/        - Application installers${C_RESET}"
+    echo "${C_DIM}${SYMBOL_BULLET} pve/         - Proxmox VE scripts${C_RESET}"
 
     echo
     print_info "Scripts are ready in: ${C_BOLD}${INSTALL_DIR/$HOME/~}${C_RESET}"

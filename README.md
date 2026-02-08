@@ -53,8 +53,6 @@ ON DEBIAN VM/LXC:
                                                          ├── 1) Configure VLANs
                                                          ├── 2) Configure Hosts
                                                          └── 3) Skip
-
-
 CLI (Non-Interactive):
 ./bootstrap.sh --vm-template   # Create VM template
 ./bootstrap.sh --lxc-template  # Create LXC template  

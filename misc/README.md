@@ -25,7 +25,8 @@ chmod +x bootstrap.sh && \
 <br>
 
 <pre>
-<a href="https://github.com/vdarkobar/lab/tree/main/misc/Bootstrap.md">bootstrap.sh</a> (context-aware)
+<a href="https://github.com/vdarkobar/lab/tree/main/misc/Bootstrap.md">bootstrap.sh</a> (context-aware - auto-detects environment)
+
 
 ON PVE HOST:
 ├── 1) <a href="https://github.com/vdarkobar/lab/tree/main/misc/DebianVMTemplate.md">Create Debian VM Template</a>
@@ -36,7 +37,7 @@ ON DEBIAN VM/LXC:
 ├── 1) <a href="https://github.com/vdarkobar/lab/tree/main/misc/HardenDebianSystem.md">Harden Debian System</a> ───────────┐
 ├── 2) <a href="https://github.com/vdarkobar/lab/tree/main/misc/JumpServer.md">Setup Jump Server</a>               │
 └── 3) Exit                            │
-                                       ▼
+                                        ▼
                                    App Menu
                                    ├── 1) <a href="https://github.com/vdarkobar/lab/tree/main/misc/Docker.md">Docker</a>
                                    ├── 2) <a href="https://github.com/vdarkobar/lab/tree/main/misc/NginxProxyManager.md">Nginx Proxy Manager (native)</a>
@@ -53,17 +54,15 @@ ON DEBIAN VM/LXC:
                                                          ├── 2) Configure Hosts
                                                          └── 3) Skip
 
-</pre>
-
-**Context Detection:**
+Context Detection:
 • Proxmox VE Host  → Shows template creation only
 • Debian VM/LXC    → Shows hardening/jump setup
 • Unknown system   → Shows all options
 
-**CLI (Non-Interactive):**
+CLI (Non-Interactive):
 ./bootstrap.sh --vm-template   # Create VM template
 ./bootstrap.sh --lxc-template  # Create LXC template  
 ./bootstrap.sh --harden        # Run hardening
 ./bootstrap.sh --jump          # Setup jump server
 ./bootstrap.sh --download-only # Download only
-
+</pre>

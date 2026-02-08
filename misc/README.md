@@ -27,8 +27,6 @@ chmod +x bootstrap.sh && \
 <pre>
 <a href="https://github.com/vdarkobar/lab/tree/main/misc/Bootstrap.md">bootstrap.sh</a> (context-aware)
 
-════════════════════════════════════════════════════════════════════
-
 ON PVE HOST:
 ├── 1) <a href="https://github.com/vdarkobar/lab/tree/main/misc/DebianVMTemplate.md">Create Debian VM Template</a>
 ├── 2) <a href="https://github.com/vdarkobar/lab/tree/main/misc/DebianLXCTemplate.md">Create Debian LXC Template</a>
@@ -55,7 +53,7 @@ ON DEBIAN VM/LXC:
                                                          ├── 2) Configure Hosts
                                                          └── 3) Skip
 
-════════════════════════════════════════════════════════════════════
+</pre>
 
 **Context Detection:**
 • Proxmox VE Host  → Shows template creation only
@@ -68,4 +66,4 @@ ON DEBIAN VM/LXC:
 ./bootstrap.sh --harden        # Run hardening
 ./bootstrap.sh --jump          # Setup jump server
 ./bootstrap.sh --download-only # Download only
-</pre>
+

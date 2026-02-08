@@ -5,7 +5,7 @@
 # Source: https://github.com/vdarkobar/lab                                  #
 #                                                                           #
 # This script:                                                              #
-#   1. Creates directory structure (server/, apps/, pve/)                   #
+#   1. Creates directory structure (server/, apps/, pve/, misc/)            #
 #   2. Downloads all components from GitHub (including itself)              #
 #   3. Verifies checksums for security                                      #
 #   4. Presents menu to run setup scripts                                   #
@@ -326,7 +326,7 @@ Secure Install (verified):
   chmod +x bootstrap.sh && ./bootstrap.sh
 
 WHAT IT DOES:
-  - Creates directory structure: ~/lab/{server,apps,pve}
+  - Creates directory structure: ~/lab/{server,apps,pve,misc}
   - Downloads all components from GitHub (including bootstrap itself)
   - Verifies SHA256 checksums for security
   - Presents menu to run setup scripts (or runs directly with --options)
@@ -434,6 +434,7 @@ create_directories() {
         "$INSTALL_DIR/server"
         "$INSTALL_DIR/apps"
         "$INSTALL_DIR/pve"
+        "$INSTALL_DIR/misc"
     )
 
     for dir in "${directories[@]}"; do
@@ -518,6 +519,8 @@ download_components() {
         "apps/samba.sh|Samba File Server Installer"
         "apps/bookstack.sh|Bookstack Wiki Installer"
         "apps/bentopdf.sh|BentoPDF Editor Installer"
+        "misc/SKILL.md|Lab Script Standardization Guide"
+        "misc/README.md|Repository Documentation"
     )
 
     # Download each file
@@ -615,6 +618,8 @@ verify_checksums() {
         "apps/samba.sh"
         "apps/bookstack.sh"
         "apps/bentopdf.sh"
+        "misc/SKILL.md"
+        "misc/README.md"
     )
 
     for file_path in "${downloaded_files[@]}"; do
@@ -806,6 +811,7 @@ show_summary() {
     echo "${C_DIM}${SYMBOL_BULLET} server/      - Server scripts (hardening, jump)${C_RESET}"
     echo "${C_DIM}${SYMBOL_BULLET} apps/        - Application installers${C_RESET}"
     echo "${C_DIM}${SYMBOL_BULLET} pve/         - Proxmox VE scripts${C_RESET}"
+    echo "${C_DIM}${SYMBOL_BULLET} misc/        - Documentation (SKILL.md, README.md)${C_RESET}"
 
     echo
     print_info "Scripts are ready in: ${C_BOLD}${INSTALL_DIR/$HOME/~}${C_RESET}"

@@ -25,7 +25,7 @@ chmod +x bootstrap.sh && \
 <br>
 
 <pre>
-<a href="https://github.com/vdarkobar/lab/tree/main/misc/Bootstrap.md">bootstrap.sh</a> (context-aware - auto-detects environment)
+<a href="https://github.com/vdarkobar/lab/tree/main/misc/Bootstrap.md">bootstrap.sh</a> (context-aware)
 
 
 ON PVE HOST:
@@ -54,10 +54,6 @@ ON DEBIAN VM/LXC:
                                                          ├── 2) Configure Hosts
                                                          └── 3) Skip
 
-Context Detection:
-• Proxmox VE Host  → Shows template creation only
-• Debian VM/LXC    → Shows hardening/jump setup
-• Unknown system   → Shows all options
 
 CLI (Non-Interactive):
 ./bootstrap.sh --vm-template   # Create VM template

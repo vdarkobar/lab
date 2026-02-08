@@ -6,6 +6,9 @@
 #
 # Verify with: sha256sum -c CHECKSUMS.txt
 
+# Bootstrap Script
+c9389f63e6bb94c26704e97052822f9bd7ac4465ab911147fc7ba550b9ea94eb  bootstrap.sh
+
 # Server Scripts
 ec48c6b8af905f578f6ecacfdda103aa02c6b916d72fcf4c048bcfb18ef88f77  server/hardening.sh
 a6959867606dcd8e0398b24d2ead6261573da77da4afa696efae7968a9913530  server/jump.sh

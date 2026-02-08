@@ -12,7 +12,7 @@ a6959867606dcd8e0398b24d2ead6261573da77da4afa696efae7968a9913530  server/jump.sh
 
 # PVE Scripts
 f03178f832e97077d17760c86af6f21253207d3880a808d8fad45fa1ff7a96ee  pve/deblxc.sh
-08b889599eb03c79cbc6854c3e19f20b5ea718fffdfc04beff16145690472262  pve/debvm.sh
+fb9ff90bd9b1bf5d596d4f82a179cdb2db937dcd828cef1bc9f6e9e3c22a46fd  pve/debvm.sh
 
 # Application Scripts
 463569e41ea9c751e93db11d5a0d3a41082692934bf44ab8444235ca2c865f8b  apps/bentopdf.sh

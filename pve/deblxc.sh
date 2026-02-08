@@ -790,11 +790,13 @@ select_rootfs_storage() {
     print_info "Available storage locations for container rootfs:"
     echo
     
+    # Only show storage with 'rootdir' content type (for LXC containers)
+    # Exclude 'images' which is for VM disk images
     local storages
-    mapfile -t storages < <(pvesm status -content rootdir,images | awk 'NR>1 {print $1}')
+    mapfile -t storages < <(pvesm status -content rootdir | awk 'NR>1 {print $1}')
     
     if [[ ${#storages[@]} -eq 0 ]]; then
-        die "No storage with 'rootdir' or 'images' content type found"
+        die "No storage with 'rootdir' content type found"
     fi
     
     local i=1

@@ -25,7 +25,7 @@ chmod +x bootstrap.sh && \
 <br>
 
 <pre>
-<a href="https://github.com/vdarkobar/lab/tree/main/misc/Bootstrap.md">bootstrap.sh</a> (context-aware - auto-detects environment)
+<a href="https://github.com/vdarkobar/lab/tree/main/misc/Bootstrap.md">bootstrap.sh</a> (context-aware)
 
 ════════════════════════════════════════════════════════════════════
 
@@ -49,7 +49,7 @@ ON DEBIAN VM/LXC:
                                    ├── 7) <a href="https://github.com/vdarkobar/lab/tree/main/misc/BookStack.md">BookStack</a>           │
                                    ├── 8) <a href="https://github.com/vdarkobar/lab/tree/main/misc/BentoPDF.md">BentoPDF</a>            │
                                    └── N) Done                │
-                                                              ▼
+                                                               ▼
                                                          Config Menu
                                                          ├── 1) Configure VLANs
                                                          ├── 2) Configure Hosts

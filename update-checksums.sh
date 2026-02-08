@@ -56,3 +56,9 @@ fi
 echo "Done. Generated:"
 echo "  $CHECKSUMS_FILE"
 [[ -f "$BOOTSTRAP_CHECKSUM" ]] && echo "  $BOOTSTRAP_CHECKSUM"
+
+echo
+echo "To commit changes:"
+echo "  git add CHECKSUMS.txt bootstrap.sh.sha256"
+echo "  git commit -m 'Update checksums'"
+echo "  git push"

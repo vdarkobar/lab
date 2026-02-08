@@ -289,7 +289,7 @@ draw_box() {
     # Ensure minimum width for title
     [[ ${#title} -gt $max_width ]] && max_width=${#title}
     
-    local box_width=$((max_width + 2))
+    local box_width=$((max_width + 4))
     local border
     border=$(printf '═%.0s' $(seq 1 $box_width))
     
@@ -1369,7 +1369,7 @@ create_proxmox_vm() {
             qm set '$vm_id' --balloon 2048
             qm set '$vm_id' --description '<details><summary>Click to expand</summary>Debian VM Template - Created by lab/debvm.sh v${SCRIPT_VERSION}</details>'
             qm set '$vm_id' --ciuser '$username' --cipassword '$password' --ipconfig0 ip=dhcp
-            qm set '$vm_id' --tags 'vm,template,debian13'
+            qm set '$vm_id' --tags 'vm,template,debian${DEBIAN_TAG}'
         " || die "Failed to configure VM"
     
     # Step 4: Cloud-init userdata
@@ -1580,6 +1580,10 @@ cmd_install() {
     fi
     
     log INFO "Configuration confirmed, proceeding..."
+    
+    # Derive Debian version tag from image filename (e.g., debian-13-nocloud-amd64.qcow2 → 13)
+    DEBIAN_TAG="$(basename "$IMAGE_URL" | grep -oP 'debian-\K[0-9]+' || echo "debian")"
+    log INFO "Detected Debian version tag: $DEBIAN_TAG"
     
     # Template operations
     download_and_verify_image "$IMAGE_URL"

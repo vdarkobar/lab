@@ -37,7 +37,7 @@ ON DEBIAN VM/LXC:
 ├── 1) <a href="https://github.com/vdarkobar/lab/tree/main/misc/HardenDebianSystem.md">Harden Debian System</a> ───────────┐
 ├── 2) <a href="https://github.com/vdarkobar/lab/tree/main/misc/JumpServer.md">Setup Jump Server</a>               │
 └── 3) Exit                            │
-                                        ▼
+                                       ▼
                                    App Menu
                                    ├── 1) <a href="https://github.com/vdarkobar/lab/tree/main/misc/Docker.md">Docker</a>
                                    ├── 2) <a href="https://github.com/vdarkobar/lab/tree/main/misc/NginxProxyManager.md">Nginx Proxy Manager (native)</a>

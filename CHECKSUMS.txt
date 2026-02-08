@@ -1,5 +1,5 @@
 # Lab Components Checksums
-# Generated: 2026-02-06
+# Generated: 2026-02-08
 # Algorithm: SHA256
 #
 # Format: checksum  filepath
@@ -7,12 +7,12 @@
 # Verify with: sha256sum -c CHECKSUMS.txt
 
 # Server Scripts
-29627769a699a414eb5d9e32db8ac60a17bef3266f62c860bf99c4ef6ccfda3a  server/hardening.sh
-ea8630d71dea83c8c2e6fc6270ee91a515dcd04208e8eb9eaa4308798cad0ca4  server/jump.sh
+ec48c6b8af905f578f6ecacfdda103aa02c6b916d72fcf4c048bcfb18ef88f77  server/hardening.sh
+a6959867606dcd8e0398b24d2ead6261573da77da4afa696efae7968a9913530  server/jump.sh
 
 # PVE Scripts
-923e45fb862ea446c55f097414346d9550324f310eabc9c1c06e004b98de3609  pve/deblxc.sh
-2249cb2cb0e86dd8d2abfa8d5a4fb21439dcc7dade7be48a592f361e3da4c0f2  pve/debvm.sh
+54672e55b48c3c1ca8ee5d93652f348576a1fe524399928c17e649bfb9871525  pve/deblxc.sh
+b1f1c5f8ee08e3e0c7608ab6c1fe9e2f8b33dcde9af2bbbc12ce7575e1a9ee31  pve/debvm.sh
 
 # Application Scripts
 463569e41ea9c751e93db11d5a0d3a41082692934bf44ab8444235ca2c865f8b  apps/bentopdf.sh

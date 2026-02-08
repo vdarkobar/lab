@@ -59,6 +59,6 @@ echo "  $CHECKSUMS_FILE"
 
 echo
 echo "To commit changes:"
-echo "  git add CHECKSUMS.txt bootstrap.sh.sha256 && \\"
-echo "  git commit -m 'Update checksums' && \\"
-echo "  git push"
+echo "git add CHECKSUMS.txt bootstrap.sh.sha256 && \\"
+echo "git commit -m 'Update checksums' && \\"
+echo "git push"

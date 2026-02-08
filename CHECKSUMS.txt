@@ -28,7 +28,7 @@ d192f20c6956efeb73e6deae0275e34ea6723aeeb0c886a953b4f9bea4f24114  apps/npm.sh
 cad65aabedb013415ac153a558cd7be3d2ac59b6e477ea63b8eebddfda466040  apps/unbound.sh
 
 # Miscellaneous Files
-dee1a13b22f62605c529be4dd8b717d863e4edd9cc784425426dffdd9e61834f  misc/README.md
+da33b8447b86e80f0184553deebb29f645af3f2d8148403d9814db68e734a7b9  misc/README.md
 b8cf1eb4ef5ec1b0e80e7cecde87ffbe5cde00b8fbfa5a6a5edfa16844f3a997  misc/skill.md
 
 # Bootstrap Checksum File

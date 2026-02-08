@@ -11,7 +11,7 @@ ec48c6b8af905f578f6ecacfdda103aa02c6b916d72fcf4c048bcfb18ef88f77  server/hardeni
 a6959867606dcd8e0398b24d2ead6261573da77da4afa696efae7968a9913530  server/jump.sh
 
 # PVE Scripts
-f03178f832e97077d17760c86af6f21253207d3880a808d8fad45fa1ff7a96ee  pve/deblxc.sh
+1ee4b901f1e999af00531818b926655300f31b9240466a345339c2b5f1dec0ae  pve/deblxc.sh
 fb9ff90bd9b1bf5d596d4f82a179cdb2db937dcd828cef1bc9f6e9e3c22a46fd  pve/debvm.sh
 
 # Application Scripts

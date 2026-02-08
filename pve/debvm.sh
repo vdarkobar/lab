@@ -28,7 +28,6 @@
 #   DEBVM_BRIDGE                   - Network bridge (default: vmbr0)        #
 #   DEBVM_IMAGE_URL                - Custom cloud image URL                 #
 #   DEBVM_SKIP_CHECKSUM=true       - Skip SHA512 verification              #
-#   DEBVM_KEEP_DOWNLOADS=true      - Keep downloaded image after creation   #
 #############################################################################
 
 readonly SCRIPT_VERSION="3.0.0"
@@ -74,7 +73,6 @@ ENVIRONMENT VARIABLES (for non-interactive mode):
     DEBVM_BRIDGE                   Network bridge (default: vmbr0)
     DEBVM_IMAGE_URL                Custom cloud image URL
     DEBVM_SKIP_CHECKSUM=true       Skip SHA512 verification
-    DEBVM_KEEP_DOWNLOADS=true      Keep downloaded image after creation
 
 EXAMPLES:
     # Interactive creation:
@@ -111,6 +109,7 @@ NOTES:
     - Requires root privileges
     - SSH keys regenerated automatically via cloud-init on first boot
     - Uses virt-customize for image hardening (requires libguestfs-tools)
+    - Downloaded images cached in /var/lib/vz/template/iso/ for reuse
     - Password requirements: 8+ chars, 1 number, 1 special character
 
 EOF
@@ -165,6 +164,7 @@ UNATTENDED_UPGRADES_WAS_ACTIVE=false
 CLEANUP_FILES=()
 CREATED_VM_ID=""
 VM_ID=""
+WORKING_IMAGE_PATH=""
 
 # libguestfs backend
 export LIBGUESTFS_BACKEND="${LIBGUESTFS_BACKEND:-direct}"
@@ -1214,19 +1214,51 @@ download_and_verify_image() {
     image_name="$(basename "$image_url")"
     local checksums_url="${image_url%/*}/SHA512SUMS"
     local skip_checksum="${DEBVM_SKIP_CHECKSUM:-false}"
-    local keep_downloads="${DEBVM_KEEP_DOWNLOADS:-false}"
+    local image_file="$TEMPLATE_DIR/$image_name"
     
     print_section "Download Cloud Image"
     
     mkdir -p "$TEMPLATE_DIR"
     cd "$TEMPLATE_DIR"
     
-    # Download checksums
+    # Always fetch checksums (needed for both existing-file verify and fresh download)
     if [[ "$skip_checksum" != "true" ]]; then
         print_step "Downloading checksums..."
         log INFO "Downloading checksums: $checksums_url"
         wget -q "$checksums_url" -O SHA512SUMS || die "Failed to download checksums"
         CLEANUP_FILES+=("$TEMPLATE_DIR/SHA512SUMS")
+    fi
+    
+    # Check if image already exists
+    if [[ -f "$image_file" ]]; then
+        print_info "Image already exists: $image_name"
+        log INFO "Existing image found: $image_file"
+        
+        if [[ "$skip_checksum" != "true" ]]; then
+            # Verify existing file against checksums
+            print_step "Verifying existing image checksum..."
+            log STEP "Verifying existing image integrity"
+            
+            local checksum_line
+            checksum_line="$(grep -E "([[:space:]]|\\*)${image_name}$" SHA512SUMS | head -n 1 || true)"
+            
+            if [[ -n "$checksum_line" ]] && echo "$checksum_line" | sha512sum -c --status 2>/dev/null; then
+                print_success "Existing image verified (SHA512) - skipping download"
+                log SUCCESS "Existing image checksum valid, download skipped"
+                IMAGE_PATH="$image_file"
+                return 0
+            else
+                print_warning "Existing image failed checksum - re-downloading"
+                log WARN "Existing image checksum mismatch, will re-download"
+                rm -f "$image_file"
+            fi
+        else
+            # No checksum to verify, trust existing file
+            print_success "Using existing image (checksum verification disabled)"
+            log INFO "Using existing image without verification"
+            IMAGE_PATH="$image_file"
+            return 0
+        fi
     fi
     
     # Download image
@@ -1236,9 +1268,7 @@ download_and_verify_image() {
     print_success "Image downloaded: $image_name"
     log SUCCESS "Image downloaded: $image_name"
     
-    [[ "$keep_downloads" != "true" ]] && CLEANUP_FILES+=("$TEMPLATE_DIR/$image_name")
-    
-    # Verify checksum
+    # Verify freshly downloaded image
     if [[ "$skip_checksum" != "true" ]]; then
         print_step "Verifying SHA512 checksum..."
         log STEP "Verifying integrity"
@@ -1259,8 +1289,7 @@ download_and_verify_image() {
         log WARN "Checksum verification skipped"
     fi
     
-    # Return image path
-    IMAGE_PATH="$TEMPLATE_DIR/$image_name"
+    IMAGE_PATH="$image_file"
 }
 
 customize_image() {
@@ -1285,6 +1314,27 @@ customize_image() {
     
     print_success "Image customized"
     log SUCCESS "Image customized"
+}
+
+prepare_working_image() {
+    local original="$1"
+    local image_name
+    image_name="$(basename "$original")"
+    local working_copy="$TEMPLATE_DIR/${image_name%.qcow2}-working.qcow2"
+    
+    print_step "Creating working copy of image..."
+    log INFO "Copying $original → $working_copy"
+    
+    run_with_spinner "Copying image for customization" \
+        cp "$original" "$working_copy" || die "Failed to create working copy"
+    
+    # Working copy is always cleaned up automatically
+    CLEANUP_FILES+=("$working_copy")
+    
+    print_success "Working copy created"
+    log SUCCESS "Working copy: $working_copy"
+    
+    WORKING_IMAGE_PATH="$working_copy"
 }
 
 create_cloudinit_userdata() {
@@ -1364,7 +1414,8 @@ create_proxmox_vm() {
             qm set '$vm_id' --scsihw virtio-scsi-single --scsi0 '${disk_name},cache=writeback,discard=on,ssd=1'
             qm set '$vm_id' --boot c --bootdisk scsi0
             qm set '$vm_id' --scsi2 '${storage}:cloudinit'
-            qm set '$vm_id' --agent enabled=1 --serial0 socket --vga serial0
+            qm set '$vm_id' --agent enabled=1
+            qm set '$vm_id' --vga std
             qm set '$vm_id' --cpu cputype=host --ostype l26 --ciupgrade 1
             qm set '$vm_id' --balloon 2048
             qm set '$vm_id' --description '<details><summary>Click to expand</summary>Debian VM Template - Created by lab/debvm.sh v${SCRIPT_VERSION}</details>'
@@ -1520,6 +1571,7 @@ show_summary() {
     echo "  ${SYMBOL_BULLET} Use --full flag when cloning to create independent copy"
     echo "  ${SYMBOL_BULLET} Default login: $VM_USERNAME (password set during creation)"
     echo "  ${SYMBOL_BULLET} Cloud-init installs qemu-guest-agent and openssh-server on first boot"
+    echo "  ${SYMBOL_BULLET} Original image cached at: $IMAGE_PATH (reused on next run)"
     draw_separator
 }
 
@@ -1587,9 +1639,13 @@ cmd_install() {
     
     # Template operations
     download_and_verify_image "$IMAGE_URL"
-    customize_image "$IMAGE_PATH" "$VM_USERNAME" "$VM_PASSWORD"
-    create_proxmox_vm "$VM_ID" "$VM_HOSTNAME" "$VM_MEMORY" "$VM_CORES" "$VM_BRIDGE" "$VM_STORAGE" "$IMAGE_PATH" "$VM_USERNAME" "$VM_PASSWORD"
+    prepare_working_image "$IMAGE_PATH"
+    customize_image "$WORKING_IMAGE_PATH" "$VM_USERNAME" "$VM_PASSWORD"
+    create_proxmox_vm "$VM_ID" "$VM_HOSTNAME" "$VM_MEMORY" "$VM_CORES" "$VM_BRIDGE" "$VM_STORAGE" "$WORKING_IMAGE_PATH" "$VM_USERNAME" "$VM_PASSWORD"
     convert_to_template "$VM_ID"
+    
+    # Working copy is auto-deleted by cleanup handler
+    # Original image stays pristine in TEMPLATE_DIR for reuse
     
     # Summary
     show_summary

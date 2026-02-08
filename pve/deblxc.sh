@@ -31,7 +31,7 @@
 #   DEBLXC_DISK                  - Disk size in GB (default: 8)             #
 #############################################################################
 
-readonly SCRIPT_VERSION="2.0.0"
+readonly SCRIPT_VERSION="2.1.0"
 readonly SCRIPT_NAME="deblxc"
 
 #############################################################################
@@ -48,6 +48,7 @@ DESCRIPTION:
     - Non-root user with sudo privileges
     - Cloud-Init for SSH key regeneration on clone
     - Proper locales and system packages
+    - Tags: ct,template,debian<version> (e.g., debian13)
 
 USAGE:
     deblxc.sh [COMMAND]
@@ -110,6 +111,7 @@ NOTES:
     - Requires root privileges
     - SSH keys regenerated automatically via Cloud-Init on first boot
     - Password requirements: 8+ chars, 1 number, 1 special character
+    - Template version auto-detected and tagged (e.g., debian13, debian12)
 
 EOF
     exit 0
@@ -275,7 +277,7 @@ draw_box() {
     # Ensure minimum width for title
     [[ ${#title} -gt $max_width ]] && max_width=${#title}
     
-    local box_width=$((max_width + 2))
+    local box_width=$((max_width + 4))
     local border
     border=$(printf '═%.0s' $(seq 1 $box_width))
     
@@ -629,7 +631,7 @@ cmd_status() {
             # Show template details
             echo
             print_info "Template Details:"
-            grep -E "^(hostname|cores|memory|rootfs|net0)" "$config_file" 2>/dev/null | while read -r line; do
+            grep -E "^(hostname|cores|memory|rootfs|net0|tags)" "$config_file" 2>/dev/null | while read -r line; do
                 echo "  ${SYMBOL_BULLET} $line"
             done
         else
@@ -1053,8 +1055,14 @@ download_template() {
         die "Could not determine latest Debian template"
     fi
     
+    # Parse Debian version from template name (e.g., debian-13-standard → debian13)
+    local debian_version
+    debian_version=$(echo "$TEMPLATE_NAME" | grep -oP 'debian-\K[0-9]+' || echo "")
+    DEBIAN_TAG="${debian_version:+debian${debian_version}}"
+    DEBIAN_TAG="${DEBIAN_TAG:-debian}"  # Fallback to "debian" if parsing fails
+    
     print_info "Latest Debian template: $TEMPLATE_NAME"
-    log INFO "Latest template identified: $TEMPLATE_NAME"
+    log INFO "Latest template identified: $TEMPLATE_NAME (version: ${DEBIAN_TAG})"
     
     # Check if template already downloaded
     TEMPLATE_PATH="${TEMPLATE_STORAGE}:vztmpl/${TEMPLATE_NAME}"
@@ -1200,12 +1208,13 @@ EOF
 convert_to_template() {
     print_section "Convert to Template"
     
-    # Add description
-    print_step "Adding template description..."
+    # Add tags and description
+    print_step "Adding template metadata..."
     cat >> "/etc/pve/lxc/${CONTAINER_ID}.conf" <<EOF
-description: <details><summary>Click to expand</summary>Debian LXC Template - Created by lab/deblxc.sh v${SCRIPT_VERSION}</details>
+tags: ct,template,${DEBIAN_TAG}
+description: <details><summary>Click to expand</summary>Debian ${DEBIAN_TAG} LXC Template - Created by lab/deblxc.sh v${SCRIPT_VERSION}</details>
 EOF
-    log INFO "Added description to container config"
+    log INFO "Added tags (ct,template,${DEBIAN_TAG}) and description to container config"
     
     # Stop and convert
     log INFO "Stopping container $CONTAINER_ID"
@@ -1317,6 +1326,7 @@ show_summary() {
     echo "  ${SYMBOL_BULLET} Storage: $ROOTFS_STORAGE"
     echo "  ${SYMBOL_BULLET} Bridge: $BRIDGE"
     echo "  ${SYMBOL_BULLET} Resources: ${DEFAULT_CORES} cores, ${DEFAULT_MEMORY}MB RAM, ${DEFAULT_DISK}GB disk"
+    echo "  ${SYMBOL_BULLET} Tags: ct,template,${DEBIAN_TAG}"
     echo
     
     print_info "Template Configuration:"

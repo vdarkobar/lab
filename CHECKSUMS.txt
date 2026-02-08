@@ -7,7 +7,7 @@
 # Verify with: sha256sum -c CHECKSUMS.txt
 
 # Bootstrap Script
-c9389f63e6bb94c26704e97052822f9bd7ac4465ab911147fc7ba550b9ea94eb  bootstrap.sh
+3bfe8ed18b3beabd01d78f57f5a5f146b050fbf84c305901ee18d9f26fb06057  bootstrap.sh
 
 # Server Scripts
 ec48c6b8af905f578f6ecacfdda103aa02c6b916d72fcf4c048bcfb18ef88f77  server/hardening.sh
@@ -32,5 +32,5 @@ dee1a13b22f62605c529be4dd8b717d863e4edd9cc784425426dffdd9e61834f  misc/README.md
 b8cf1eb4ef5ec1b0e80e7cecde87ffbe5cde00b8fbfa5a6a5edfa16844f3a997  misc/skill.md
 
 # Bootstrap Checksum File
-4995a8de29901c71b92bd6d4a510574c087ddfad53b5a34dc3dee96e4a111173  bootstrap.sh.sha256
+843941aae35c5c73da4a0118c0795b6acb70982e779f00ffa52c7369100d3c8a  bootstrap.sh.sha256
 

@@ -43,7 +43,7 @@ ON DEBIAN VM/LXC:
                                    ├── 2) <a href="https://github.com/vdarkobar/lab/tree/main/misc/NginxProxyManager.md">Nginx Proxy Manager (native)</a>
                                    ├── 3) <a href="https://github.com/vdarkobar/lab/tree/main/misc/NginxProxyManagerDocker.md">Nginx Proxy Manager (Docker)</a>
                                    ├── 4) <a href="https://github.com/vdarkobar/lab/tree/main/misc/Cloudflared.md">Cloudflared</a>
-                                   ├── 5) <a href="https://github.com/vdarkobar/lab/tree/main/misc/UnboundDNS.md">Unbound DNS</a> ─────┐
+                                   ├── 5) <a href="https://github.com/vdarkobar/lab/tree/main/misc/UnboundDNS.md">Unbound DNS</a> ───────┐
                                    ├── 6) <a href="https://github.com/vdarkobar/lab/tree/main/misc/SambaFileServer.md">Samba File Server</a>   │
                                    ├── 7) <a href="https://github.com/vdarkobar/lab/tree/main/misc/BookStack.md">BookStack</a>           │
                                    ├── 8) <a href="https://github.com/vdarkobar/lab/tree/main/misc/BentoPDF.md">BentoPDF</a>            │

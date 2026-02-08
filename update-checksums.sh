@@ -31,7 +31,7 @@ if [[ -f "$SCRIPT_DIR/bootstrap.sh" ]]; then
 fi
 
 # Process directories
-for dir in server pve apps; do
+for dir in server pve apps misc; do
     dir_path="$SCRIPT_DIR/$dir"
     [[ ! -d "$dir_path" ]] && continue
     
@@ -39,11 +39,19 @@ for dir in server pve apps; do
         server) echo "# Server Scripts" >> "$CHECKSUMS_FILE" ;;
         pve)    echo "# PVE Scripts" >> "$CHECKSUMS_FILE" ;;
         apps)   echo "# Application Scripts" >> "$CHECKSUMS_FILE" ;;
+        misc)   echo "# Miscellaneous Files" >> "$CHECKSUMS_FILE" ;;
     esac
     
-    for script in "$dir_path"/*.sh; do
-        [[ -f "$script" ]] && sha256sum "$script" | sed "s|$SCRIPT_DIR/||" >> "$CHECKSUMS_FILE"
-    done
+    # For misc, process both .sh and .md files; otherwise only .sh
+    if [[ "$dir" == "misc" ]]; then
+        for file in "$dir_path"/*.md "$dir_path"/*.sh; do
+            [[ -f "$file" ]] && sha256sum "$file" | sed "s|$SCRIPT_DIR/||" >> "$CHECKSUMS_FILE"
+        done
+    else
+        for script in "$dir_path"/*.sh; do
+            [[ -f "$script" ]] && sha256sum "$script" | sed "s|$SCRIPT_DIR/||" >> "$CHECKSUMS_FILE"
+        done
+    fi
     
     echo >> "$CHECKSUMS_FILE"
 done
@@ -59,6 +67,6 @@ echo "  $CHECKSUMS_FILE"
 
 echo
 echo "To commit changes:"
-echo "git add CHECKSUMS.txt bootstrap.sh.sha256 && \\"
-echo "git commit -m 'Update checksums' && \\"
-echo "git push"
+echo "  git add CHECKSUMS.txt bootstrap.sh.sha256 && \\"
+echo "  git commit -m 'Update checksums' && \\"
+echo "  git push"

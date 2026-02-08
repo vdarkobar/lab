@@ -519,7 +519,7 @@ download_components() {
         "apps/samba.sh|Samba File Server Installer"
         "apps/bookstack.sh|Bookstack Wiki Installer"
         "apps/bentopdf.sh|BentoPDF Editor Installer"
-        "misc/SKILL.md|Lab Script Standardization Guide"
+        "misc/skill.md|Lab Script Standardization Guide"
         "misc/README.md|Repository Documentation"
     )
 

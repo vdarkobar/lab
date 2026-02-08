@@ -232,7 +232,7 @@ draw_box() {
     # Ensure minimum width for title
     [[ ${#title} -gt $max_width ]] && max_width=${#title}
     
-    local box_width=$((max_width + 4))
+    local box_width=$((max_width + 2))
     local border
     border=$(printf '═%.0s' $(seq 1 $box_width))
     

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Minimal checksum generator - no formatting, just commands
-# Usage: ./update-checksums-minimal.sh
+# Usage: ./update-checksums.sh
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CHECKSUMS_FILE="$SCRIPT_DIR/CHECKSUMS.txt"
@@ -57,8 +57,14 @@ for dir in server pve apps misc; do
 done
 
 # Generate bootstrap.sh.sha256
+# Generate bootstrap.sh.sha256 and add it to CHECKSUMS.txt
 if [[ -f "$SCRIPT_DIR/bootstrap.sh" ]]; then
     sha256sum "$SCRIPT_DIR/bootstrap.sh" | sed "s|$SCRIPT_DIR/||" > "$BOOTSTRAP_CHECKSUM"
+    
+    # Add the .sha256 file itself to CHECKSUMS.txt
+    echo "# Bootstrap Checksum File" >> "$CHECKSUMS_FILE"
+    sha256sum "$BOOTSTRAP_CHECKSUM" | sed "s|$SCRIPT_DIR/||" >> "$CHECKSUMS_FILE"
+    echo >> "$CHECKSUMS_FILE"
 fi
 
 echo "Done. Generated:"
@@ -70,3 +76,4 @@ echo "To commit changes:"
 echo "git add CHECKSUMS.txt bootstrap.sh.sha256 && \\"
 echo "git commit -m 'Update checksums' && \\"
 echo "git push"
+echo

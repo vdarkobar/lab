@@ -37,13 +37,13 @@ ON DEBIAN VM/LXC:
 ├── 1) <a href="https://github.com/vdarkobar/lab/tree/main/misc/HardenDebianSystem.md">Harden Debian System</a> ───────────┐
 ├── 2) <a href="https://github.com/vdarkobar/lab/tree/main/misc/JumpServer.md">Setup Jump Server</a>               │
 └── 3) Exit                            │
-                                        ▼
+                                       ▼
                                    App Menu
                                    ├── 1) <a href="https://github.com/vdarkobar/lab/tree/main/misc/Docker.md">Docker</a>
                                    ├── 2) <a href="https://github.com/vdarkobar/lab/tree/main/misc/NginxProxyManager.md">Nginx Proxy Manager (native)</a>
                                    ├── 3) <a href="https://github.com/vdarkobar/lab/tree/main/misc/NginxProxyManagerDocker.md">Nginx Proxy Manager (Docker)</a>
                                    ├── 4) <a href="https://github.com/vdarkobar/lab/tree/main/misc/Cloudflared.md">Cloudflared</a>
-                                   ├── 5) <a href="https://github.com/vdarkobar/lab/tree/main/misc/UnboundDNS.md">Unbound DNS</a> ─────┐
+                                   ├── 5) <a href="https://github.com/vdarkobar/lab/tree/main/misc/UnboundDNS.md">Unbound DNS</a> ────────┐
                                    ├── 6) <a href="https://github.com/vdarkobar/lab/tree/main/misc/SambaFileServer.md">Samba File Server</a>   │
                                    ├── 7) <a href="https://github.com/vdarkobar/lab/tree/main/misc/BookStack.md">BookStack</a>           │
                                    ├── 8) <a href="https://github.com/vdarkobar/lab/tree/main/misc/BentoPDF.md">BentoPDF</a>            │
@@ -53,8 +53,6 @@ ON DEBIAN VM/LXC:
                                                          ├── 1) Configure VLANs
                                                          ├── 2) Configure Hosts
                                                          └── 3) Skip
-
-
 CLI (Non-Interactive):
 ./bootstrap.sh --vm-template   # Create VM template
 ./bootstrap.sh --lxc-template  # Create LXC template  

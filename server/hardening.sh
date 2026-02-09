@@ -286,8 +286,8 @@ log() {
     local stripped_msg
     stripped_msg=$(strip_ansi "$msg")
     
-    # Append to log file (if LOG_FILE is set)
-    if [[ -n "${LOG_FILE:-}" ]]; then
+    # Append to log file (if LOG_FILE is set and writable)
+    if [[ -n "${LOG_FILE:-}" ]] && [[ -w "${LOG_FILE:-}" ]]; then
         echo "[${timestamp}] [${level}] ${stripped_msg}" >> "${LOG_FILE}" 2>/dev/null || true
     fi
     
@@ -460,7 +460,7 @@ cleanup() {
     fi
     
     # Write to log file only (no console output during cleanup)
-    if [[ -n "${LOG_FILE:-}" ]]; then
+    if [[ -n "${LOG_FILE:-}" ]] && [[ -w "${LOG_FILE:-}" ]]; then
         local timestamp
         timestamp=$(date '+%Y-%m-%d %H:%M:%S') 2>/dev/null || true
         if [[ $exit_code -eq 0 ]]; then

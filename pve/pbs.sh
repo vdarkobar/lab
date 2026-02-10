@@ -29,7 +29,7 @@
 #############################################################################
 
 readonly SCRIPT_VERSION="1.0.0"
-readonly SCRIPT_NAME="pbs-lxc"
+readonly SCRIPT_NAME="pbs"
 
 #############################################################################
 # Handle --help BEFORE set -euo pipefail                                    #
@@ -47,7 +47,7 @@ DESCRIPTION:
     - Tags: ct,pbs,debian<version> (e.g., debian13)
 
 USAGE:
-    pbs-lxc.sh [COMMAND]
+    pbs.sh [COMMAND]
 
 COMMANDS:
     (no args)         Create PBS LXC container (default)
@@ -72,7 +72,7 @@ ENVIRONMENT VARIABLES (for non-interactive mode):
 
 EXAMPLES:
     # Interactive creation:
-    ./pbs-lxc.sh
+    ./pbs.sh
 
     # Fully automated:
     PBS_LXC_SILENT=true \
@@ -82,16 +82,16 @@ EXAMPLES:
     PBS_LXC_HOSTNAME=pbs \
     PBS_LXC_PASSWORD='SecurePass1!' \
     PBS_LXC_BRIDGE=vmbr0 \
-    ./pbs-lxc.sh
+    ./pbs.sh
 
     # Check container status:
-    ./pbs-lxc.sh --status
+    ./pbs.sh --status
 
     # View creation logs:
-    ./pbs-lxc.sh --logs 100
+    ./pbs.sh --logs 100
 
     # Delete container:
-    ./pbs-lxc.sh --uninstall
+    ./pbs.sh --uninstall
 
 ACCESS:
     https://<container-ip>:8007
@@ -1290,11 +1290,16 @@ verify_pbs_services() {
 finalize_container() {
     print_section "Finalize Container"
     
-    # Add tags and description
+    # Get container IP for description link
+    local ct_ip
+    ct_ip=$(pct exec "$CONTAINER_ID" -- hostname -I 2>/dev/null | awk '{print $1}')
+    ct_ip="${ct_ip:-<IP>}"
+    
+    # Add tags and description with clickable PBS web UI link
     print_step "Adding container metadata..."
     cat >> "/etc/pve/lxc/${CONTAINER_ID}.conf" <<EOF
 tags: ct,pbs,${DEBIAN_TAG}
-description: <details><summary>Click to expand</summary>Proxmox Backup Server on ${DEBIAN_TAG} LXC - Created by lab/pbs-lxc.sh v${SCRIPT_VERSION}</details>
+description: <a href='https://${ct_ip}:${PBS_PORT}/#pbsDashboard' target='_blank' rel='noopener noreferrer' style='text-decoration: none; color: #00617f;'>PBS</a>%0A%0A<details><summary>Details</summary>Proxmox Backup Server on ${DEBIAN_TAG} LXC%0ACreated by lab/pve/pbs.sh v${SCRIPT_VERSION}</details>
 EOF
     log INFO "Added tags (ct,pbs,${DEBIAN_TAG}) and description to container config"
     
